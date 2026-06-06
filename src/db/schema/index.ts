@@ -6,5 +6,7 @@ export * from "./documents";
 export * from "./documentExtractions";
 export * from "./llmRuns";
 export * from "./extractedInvoices";
+export * from "./vendors";
+export * from "./validationResults";
 export * from "./auditEvents";
 export * from "./apiIdempotencyKeys";

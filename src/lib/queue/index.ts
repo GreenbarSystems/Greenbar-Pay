@@ -46,9 +46,14 @@ export async function stopQueue(): Promise<void> {
 export const JOB = {
   processDocument: "process-document",
   extractInvoiceData: "extract-invoice-data",
+  validateExtractedInvoice: "validate-extracted-invoice",
 } as const;
 
 export type JobPayloads = {
   [JOB.processDocument]: { documentId: string; organizationId: string };
   [JOB.extractInvoiceData]: { documentId: string; organizationId: string };
+  [JOB.validateExtractedInvoice]: {
+    extractedInvoiceId: string;
+    organizationId: string;
+  };
 };

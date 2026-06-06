@@ -37,7 +37,7 @@ import {
 } from "@/lib/llm";
 import { scrub } from "@/lib/llm/scrub";
 import type { JobPayloads } from "@/lib/queue";
-import { JOB } from "@/lib/queue";
+import { JOB, getQueue } from "@/lib/queue";
 
 export async function handleExtractInvoiceData(
   job: PgBoss.Job<JobPayloads[typeof JOB.extractInvoiceData]>,
@@ -259,6 +259,15 @@ async function persistOutcome(
           warningCount: r.warnings.length,
         }),
       });
+
+      // Phase 4 handoff: enqueue validation. Validator transitions doc
+      // to 'review_required' and the invoice to pending/needs_review.
+      const boss = await getQueue();
+      await boss.send(
+        JOB.validateExtractedInvoice,
+        { extractedInvoiceId: inserted.id, organizationId },
+        { singletonKey: `validate-extracted-invoice:${inserted.id}` },
+      );
       return;
     }
 
