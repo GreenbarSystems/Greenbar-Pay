@@ -17,6 +17,10 @@ WORKDIR /app
 ENV NODE_ENV=production
 # tesseract.js downloads language data on first run; cache it in /app/.tesseract
 ENV TESSDATA_PREFIX=/app/.tesseract
+# poppler-utils provides pdftoppm, used by the PDF rasterization fallback
+# (src/lib/ocr/pdf-rasterize.ts). ~10 MB; well worth the cost vs. canvas
+# native bindings.
+RUN apk add --no-cache poppler-utils
 COPY --from=build /app .
 EXPOSE 3000
 # Override the command in docker-compose for the worker service.

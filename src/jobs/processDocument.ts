@@ -1,25 +1,24 @@
 /**
  * process-document — PRD §"Job: Process Document".
  *
- * Steps:
- *   1. Load document row (worker scope, RLS-enforced via withOrgAsWorker).
- *   2. Compare-and-set status to 'processing' (§4.5 — silent skip if lost).
- *   3. Fetch original file from storage.
- *   4. Native PDF extraction first.
- *   5. If PDF text scored poorly: log a warning. (PDF→OCR rasterization
- *      is a Phase 2.1 add — see tesseract.ts for the gap.)
- *   6. If input is an image: Tesseract.
- *   7. Store raw text in object storage.
- *   8. Insert document_extractions row (append-only, §4.1).
- *   9. Compare-and-set documents.status → 'text_extracted'.
- *  10. Append an audit event.
+ * Extraction order:
+ *   PDF  → native pdf-parse first; if its quality score is below the
+ *          threshold, retry via tesseract_pdf (pdftoppm → Tesseract per
+ *          page). The better of the two by quality score wins.
+ *   IMG  → tesseract_image directly.
  *
- * Idempotency: the job is keyed on document_id (queue-level retry). Step 2's
- * compare-and-set means a duplicate delivery either:
- *   (a) sees status='received' and proceeds (legitimate retry), or
- *   (b) sees status not in (received, processing) and aborts silently.
- * Either way, no duplicate extractions are stored — the OCR work may run
- * twice on a crash, but the latest-by-created_at reader picks one row.
+ * Steps:
+ *   1. Load document row + compare-and-set status to 'processing' (§4.5).
+ *   2. Fetch original file from storage.
+ *   3. Run extractors per the order above.
+ *   4. Store raw text in object storage.
+ *   5. Insert document_extractions row (append-only, §4.1).
+ *   6. Compare-and-set documents.status → 'text_extracted'.
+ *   7. Append an audit event.
+ *
+ * Idempotency: queue redelivers are absorbed by the compare-and-set on
+ * step 1 — only `received` / `processing` are claimable. Older statuses
+ * silently no-op.
  */
 import { randomUUID } from "node:crypto";
 import type PgBoss from "pg-boss";
@@ -30,14 +29,12 @@ import { storage, rawTextStorageKey } from "@/lib/storage";
 import {
   nativePdfExtractor,
   tesseractExtractor,
-  scoreText,
+  tesseractPdfExtractor,
   type ExtractionResult,
 } from "@/lib/ocr";
 import { LOW_QUALITY_THRESHOLD, LOW_TEXT_LENGTH } from "@/lib/ocr/text-quality";
 import type { JobPayloads } from "@/lib/queue";
 import { JOB } from "@/lib/queue";
-
-const EXTRACTORS = [nativePdfExtractor, tesseractExtractor];
 
 export async function handleProcessDocument(
   job: PgBoss.Job<JobPayloads[typeof JOB.processDocument]>,
@@ -78,12 +75,8 @@ export async function handleProcessDocument(
   const bytes = await storage.getObject(doc.storageKey);
   const mimeType = doc.mimeType ?? "application/octet-stream";
 
-  // ── 3. Run extractors until one yields text ──────────────────────────
-  let result: ExtractionResult | null = null;
-  for (const extractor of EXTRACTORS) {
-    result = await extractor.extract({ mimeType, bytes });
-    if (result) break;
-  }
+  // ── 3. Run extractors ────────────────────────────────────────────────
+  let result = await runExtractionPipeline(mimeType, bytes);
 
   if (!result) {
     // No extractor accepts this MIME — should not happen given §2.6 sniff,
@@ -112,10 +105,10 @@ export async function handleProcessDocument(
   if (result.qualityScore < LOW_QUALITY_THRESHOLD)
     warnings.push("low_quality_text");
   if (result.text.length < LOW_TEXT_LENGTH) warnings.push("low_text_length");
-  // Phase 2 gap: low-quality PDFs need rasterize→tesseract; flagged for
-  // review until Phase 2.1 wires poppler.
-  if (mimeType === "application/pdf" && result.qualityScore < LOW_QUALITY_THRESHOLD)
-    warnings.push("pdf_ocr_fallback_pending");
+  // Surface rasterize failures so the review queue knows why a PDF lacks text.
+  const rasterizeError = (result.metadata as { rasterizeError?: string })
+    ?.rasterizeError;
+  if (rasterizeError) warnings.push(`rasterize:${rasterizeError}`);
 
   await withOrgAsWorker(organizationId, async (tx) => {
     await tx.insert(documentExtractions).values({
@@ -186,5 +179,38 @@ async function markFailed(
       metadataJson: { reason },
     });
   });
+}
+
+/**
+ * Extraction routing.
+ *
+ *   PDF  → native pdf-parse → if quality < threshold, also run
+ *          tesseract_pdf → pick whichever scored higher. Both attempts
+ *          are visible to the caller via the chosen result's metadata.
+ *   IMG  → tesseract_image (single attempt).
+ *
+ * We return ExtractionResult instead of "best of N" so the caller stays
+ * dumb. Callers see one result and store one row.
+ */
+async function runExtractionPipeline(
+  mimeType: string,
+  bytes: Buffer,
+): Promise<ExtractionResult | null> {
+  if (mimeType === "application/pdf") {
+    const native = await nativePdfExtractor.extract({ mimeType, bytes });
+    if (native && native.qualityScore >= LOW_QUALITY_THRESHOLD) {
+      return native;
+    }
+    // Native didn't yield usable text — try OCR. Even if rasterization
+    // fails internally, tesseractPdfExtractor returns a structured result
+    // with the reason, which we surface as a warning.
+    const ocr = await tesseractPdfExtractor.extract({ mimeType, bytes });
+    if (!native) return ocr; // shouldn't happen, but safe.
+    if (!ocr) return native;
+    // Pick the better of the two.
+    return ocr.qualityScore > native.qualityScore ? ocr : native;
+  }
+
+  return tesseractExtractor.extract({ mimeType, bytes });
 }
 
