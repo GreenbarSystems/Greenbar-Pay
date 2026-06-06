@@ -10,6 +10,7 @@ import "dotenv/config";
 import { getQueue, stopQueue } from "@/lib/queue";
 import { HANDLERS } from "@/jobs";
 import { isInboxEnabled, startInboxPoller, stopInboxPoller } from "@/lib/inbox/sqs";
+import { scrubError } from "@/lib/llm/scrub";
 
 async function main() {
   const boss = await getQueue();
@@ -24,9 +25,11 @@ async function main() {
           `[worker] ${name} job=${job.id} ok in ${Date.now() - started}ms`,
         );
       } catch (err) {
+        // §2.4 — never log raw payloads. Anthropic SDK + Drizzle error
+        // messages can echo request content; route through scrubError.
         console.error(
           `[worker] ${name} job=${job.id} failed in ${Date.now() - started}ms`,
-          err,
+          scrubError(err),
         );
         throw err; // let pg-boss apply retry policy
       }
@@ -56,6 +59,6 @@ async function main() {
 }
 
 main().catch((err) => {
-  console.error("[worker] fatal", err);
+  console.error("[worker] fatal", scrubError(err));
   process.exit(1);
 });

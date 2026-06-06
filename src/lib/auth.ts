@@ -8,7 +8,7 @@
 import NextAuth, { type DefaultSession } from "next-auth";
 import Credentials from "next-auth/providers/credentials";
 import { eq } from "drizzle-orm";
-import { rawUserDb } from "@/db/internal/rawClient";
+import { rawAdminDb } from "@/db/internal/rawClient";
 import { users } from "@/db/schema";
 import type { UserRole } from "@/lib/rbac";
 
@@ -42,10 +42,11 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         const email = String(creds?.email ?? "").trim().toLowerCase();
         if (!email) return null;
 
-        // RLS bypass is fine here: we need to look up by email before any
-        // org context exists. This is the *only* unscoped read in the app
-        // and runs as app_admin via a dedicated lookup pool, not user data.
-        const row = await rawUserDb
+        // Sign-in is inherently cross-tenant — we don't know the org until
+        // we've found the user. Use the BYPASSRLS admin pool. Same blessed
+        // escape hatch documented in db/internal/rawClient.ts; this is the
+        // sole non-inbox caller and any new caller requires review.
+        const row = await rawAdminDb
           .select({
             id: users.id,
             email: users.email,

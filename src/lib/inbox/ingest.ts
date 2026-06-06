@@ -35,6 +35,7 @@ import { storage, documentStorageKey } from "@/lib/storage";
 import { parseEml, type ParsedEmail, type ParsedAttachment } from "./parse";
 import { parseInboxAddress } from "./address";
 import { getQueue, JOB } from "@/lib/queue";
+import { scrubError } from "@/lib/llm/scrub";
 
 const PROVIDER = "ses"; // V1 — Phase 6 only wires SES. Extend with a router later.
 
@@ -262,11 +263,15 @@ export async function ingestEmlMessage(input: IngestInput): Promise<IngestResult
       });
     });
   } catch (err) {
+    // Scrub before persisting — parse / storage errors can carry filenames
+    // or other content fragments (§2.4 applies to DB writes too once the
+    // value is surfaced anywhere).
+    const scrubbedMessage = scrubError(err).message.slice(0, 500);
     await rawAdminDb
       .update(emailMessages)
       .set({
         status: "failed",
-        statusReason: (err as Error).message.slice(0, 500),
+        statusReason: scrubbedMessage,
         processedAt: sql`now()`,
       })
       .where(eq(emailMessages.id, emailMessageId));

@@ -3,16 +3,23 @@
  * (or otherwise unfit for entry). Reason is required; both the invoice
  * row and parent document advance to rejected.
  *
- * Idempotency-Key honored (§4.6). Compare-and-set on review_status.
+ * Compare-and-set on review_status (§4.5); reviewed_at from sql`now()`
+ * (DB clock, not Node's). Idempotency-Key honored (§4.6). Audit row
+ * carries a content snapshot so we know what was rejected.
  */
 import { NextResponse } from "next/server";
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import { z } from "zod";
 import { auth } from "@/lib/auth";
 import { withOrg } from "@/db/client";
 import { extractedInvoices, auditEvents, documents } from "@/db/schema";
 import { requirePermission } from "@/lib/rbac";
 import { withIdempotency } from "@/lib/review/idempotencyWrap";
+import {
+  requireUuid,
+  pickFields,
+  INVOICE_HEADER_FIELDS,
+} from "@/lib/route-helpers";
 
 const RejectSchema = z.object({
   reason: z.string().min(1, "reason is required").max(500),
@@ -22,6 +29,9 @@ export async function POST(
   req: Request,
   { params }: { params: { id: string } },
 ) {
+  const bad = requireUuid(params.id);
+  if (bad) return bad;
+
   const session = await auth();
   if (!session?.user) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   const { organizationId, role, id: userId } = session.user;
@@ -49,9 +59,31 @@ export async function POST(
     body,
     async () => {
       return withOrg(organizationId, async (tx) => {
+        // Snapshot for audit before mutating.
+        const [before] = await tx
+          .select()
+          .from(extractedInvoices)
+          .where(
+            and(
+              eq(extractedInvoices.id, params.id),
+              eq(extractedInvoices.organizationId, organizationId),
+            ),
+          )
+          .limit(1);
+        if (!before) {
+          return {
+            status: 404,
+            body: { error: "not_found" },
+          };
+        }
+
         const [updated] = await tx
           .update(extractedInvoices)
-          .set({ reviewStatus: "rejected", reviewedBy: userId, reviewedAt: new Date() })
+          .set({
+            reviewStatus: "rejected",
+            reviewedBy: userId,
+            reviewedAt: sql`now()`,
+          })
           .where(
             and(
               eq(extractedInvoices.id, params.id),
@@ -88,6 +120,10 @@ export async function POST(
           action: "invoice.rejected",
           entityType: "extracted_invoice",
           entityId: params.id,
+          beforeJson: pickFields(
+            before as unknown as Record<string, unknown>,
+            INVOICE_HEADER_FIELDS,
+          ),
           metadataJson: { reason: body.reason },
         });
 

@@ -4,12 +4,26 @@
  * Refuses to approve while blocking validation findings are present —
  * those have to be resolved via PATCH first.
  *
+ * Refuses to approve while NO validation row exists yet — that closes
+ * the race window between extract-invoice-data completing and
+ * validate-extracted-invoice running.
+ *
+ * Refuses to approve when the same user uploaded the source document
+ * (separation of duties — placeholder; PR2 wires this with audit
+ * metadata).  TODO(SoD): see review #2.
+ *
  * Compare-and-set on review_status (§4.5):
  *   WHERE review_status IN ('pending', 'needs_review')
+ * `reviewed_at` is sourced from the DB clock (sql`now()`) — Node
+ * `new Date()` would be a forgeable attestation timestamp.
  * Idempotency-Key honored (§4.6).
+ *
+ * Audit row carries a content snapshot in `beforeJson` so the
+ * attestation event proves *what* was approved, not just that
+ * someone clicked approve.
  */
 import { NextResponse } from "next/server";
-import { and, desc, eq, inArray } from "drizzle-orm";
+import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import { auth } from "@/lib/auth";
 import { withOrg } from "@/db/client";
 import {
@@ -20,11 +34,19 @@ import {
 } from "@/db/schema";
 import { requirePermission } from "@/lib/rbac";
 import { withIdempotency } from "@/lib/review/idempotencyWrap";
+import {
+  requireUuid,
+  pickFields,
+  INVOICE_HEADER_FIELDS,
+} from "@/lib/route-helpers";
 
 export async function POST(
   req: Request,
   { params }: { params: { id: string } },
 ) {
+  const bad = requireUuid(params.id);
+  if (bad) return bad;
+
   const session = await auth();
   if (!session?.user) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   const { organizationId, role, id: userId } = session.user;
@@ -42,7 +64,9 @@ export async function POST(
     {},
     async () => {
       return withOrg(organizationId, async (tx) => {
-        // Block approval while blocking findings exist.
+        // Block approval until a validation row EXISTS (closes the race
+        // window between extract-invoice-data and validate-extracted-invoice)
+        // AND, if it exists, has no blocking findings.
         const [latest] = await tx
           .select()
           .from(validationResults)
@@ -54,7 +78,17 @@ export async function POST(
           )
           .orderBy(desc(validationResults.createdAt))
           .limit(1);
-        if (latest && latest.severity === "blocking" && !latest.passed) {
+        if (!latest) {
+          return {
+            status: 409,
+            body: {
+              error: "validation_pending",
+              message:
+                "Validation has not run yet for this invoice. Retry in a few seconds.",
+            },
+          };
+        }
+        if (latest.severity === "blocking" && !latest.passed) {
           return {
             status: 422,
             body: {
@@ -65,9 +99,34 @@ export async function POST(
           };
         }
 
+        // Snapshot the row BEFORE the UPDATE so the audit event records
+        // the content that was approved. PATCH already does this.
+        const [before] = await tx
+          .select()
+          .from(extractedInvoices)
+          .where(
+            and(
+              eq(extractedInvoices.id, params.id),
+              eq(extractedInvoices.organizationId, organizationId),
+            ),
+          )
+          .limit(1);
+        if (!before) {
+          return {
+            status: 404,
+            body: { error: "not_found" },
+          };
+        }
+
         const [updated] = await tx
           .update(extractedInvoices)
-          .set({ reviewStatus: "approved", reviewedBy: userId, reviewedAt: new Date() })
+          .set({
+            reviewStatus: "approved",
+            reviewedBy: userId,
+            // DB clock — Node `new Date()` is forgeable, every other
+            // timestamp in this codebase is server-side.
+            reviewedAt: sql`now()`,
+          })
           .where(
             and(
               eq(extractedInvoices.id, params.id),
@@ -104,6 +163,16 @@ export async function POST(
           action: "invoice.approved",
           entityType: "extracted_invoice",
           entityId: params.id,
+          beforeJson: pickFields(
+            before as unknown as Record<string, unknown>,
+            INVOICE_HEADER_FIELDS,
+          ),
+          metadataJson: {
+            validationResultId: latest.id,
+            findingCount: Array.isArray(latest.errorsJson)
+              ? (latest.errorsJson as unknown[]).length
+              : 0,
+          },
         });
 
         return {
