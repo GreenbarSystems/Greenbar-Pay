@@ -45,8 +45,10 @@ export async function stopQueue(): Promise<void> {
 /** Canonical job names. Keep in lockstep with the registry in src/jobs. */
 export const JOB = {
   processDocument: "process-document",
+  extractInvoiceData: "extract-invoice-data",
 } as const;
 
 export type JobPayloads = {
   [JOB.processDocument]: { documentId: string; organizationId: string };
+  [JOB.extractInvoiceData]: { documentId: string; organizationId: string };
 };

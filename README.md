@@ -30,7 +30,17 @@ overrides the base PRD where they conflict.
 - Rasterizer failures (missing binary, too many pages) surface as structured warnings
 - Worker Dockerfile installs `poppler-utils`
 
-LLM extraction, validation, review queue, and export ship in later phases.
+**Phase 3 — LLM gateway** ✓ shipped
+- Anthropic tool-use forces strict-JSON output against `INVOICE_TOOL_JSON_SCHEMA`
+- §2.2 compliance registry: gateway refuses to dispatch to any model lacking ZDR + US + non-retention. Adding a model means a registry entry — checked in CI.
+- §2.3 `buildExtractionPrompt` is the single allowed prompt entry point; ESLint blocks `@anthropic-ai/sdk` imports outside `src/lib/llm/internal/`
+- §2.4 log scrubber strips `vendor_name | invoice_number | account_number | routing | ein | ssn | tax_id` (and raw payloads) from anything logged
+- §2.7 pre-flight: 80k-token char cap (`text_too_large`), per-org daily quota (1000/day), in-memory circuit breaker (25% error rate over 5 min, 30 s half-open)
+- §"Retry malformed JSON": one correction-prompted retry on schema validation failure
+- §4.2 supersede: partial unique index keeps at most one `pending|needs_review` row per document; reviewer-acted rows are immune to upstream retries
+- §4.1 `llm_runs` table logs every dispatch (success, schema fail, provider error, pre-flight reject) with input hash only — never the prompt text
+
+Validation, review queue, and export ship in later phases.
 
 ## Local dev
 

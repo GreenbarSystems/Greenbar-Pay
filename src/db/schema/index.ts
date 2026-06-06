@@ -4,5 +4,7 @@ export * from "./clients";
 export * from "./users";
 export * from "./documents";
 export * from "./documentExtractions";
+export * from "./llmRuns";
+export * from "./extractedInvoices";
 export * from "./auditEvents";
 export * from "./apiIdempotencyKeys";
