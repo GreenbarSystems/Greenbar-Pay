@@ -34,7 +34,7 @@ import {
 } from "@/lib/ocr";
 import { LOW_QUALITY_THRESHOLD, LOW_TEXT_LENGTH } from "@/lib/ocr/text-quality";
 import type { JobPayloads } from "@/lib/queue";
-import { JOB } from "@/lib/queue";
+import { JOB, getQueue } from "@/lib/queue";
 
 export async function handleProcessDocument(
   job: PgBoss.Job<JobPayloads[typeof JOB.processDocument]>,
@@ -157,7 +157,18 @@ export async function handleProcessDocument(
     });
   });
 
-  // Phase 3 will enqueue 'extract-invoice-data' here. For Phase 2 we stop.
+  // ── 6. Hand off to Phase 3 LLM extraction ────────────────────────────
+  // Only enqueue if the extraction produced enough text to work with —
+  // an empty extraction would just hit the LLM gateway's text_too_large
+  // path (or worse, waste a dispatch). Threshold is intentionally low.
+  if (result.text.length >= LOW_TEXT_LENGTH) {
+    const boss = await getQueue();
+    await boss.send(
+      JOB.extractInvoiceData,
+      { documentId, organizationId },
+      { singletonKey: `extract-invoice-data:${documentId}` },
+    );
+  }
 }
 
 async function markFailed(

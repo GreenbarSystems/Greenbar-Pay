@@ -30,3 +30,29 @@ export const documentSource = pgEnum("document_source", [
   "email",
   "api",
 ]);
+
+/**
+ * Invoice review status (PRD + addendum §4.3).
+ * `superseded` exists so retries of extract-invoice-data can soft-replace
+ * a prior pending/needs_review row without violating the partial unique
+ * index from §4.2.
+ */
+export const invoiceReviewStatus = pgEnum("invoice_review_status", [
+  "pending",
+  "needs_review",
+  "approved",
+  "rejected",
+  "exported",
+  "superseded",
+]);
+
+/** llm_runs.status — addendum §4.1 append-only model. */
+export const llmRunStatus = pgEnum("llm_run_status", [
+  "started",
+  "succeeded",
+  "schema_failed",
+  "provider_error",
+  "text_too_large",
+  "quota_exceeded",
+  "circuit_open",
+]);
