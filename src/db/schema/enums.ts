@@ -67,3 +67,28 @@ export const exportStatus = pgEnum("export_status", [
   "completed",
   "failed",
 ]);
+
+/**
+ * email_messages.status (addendum §3.6).
+ * - received       just landed; not yet processed
+ * - processing     worker claimed it
+ * - processed      one or more attachments accepted as documents
+ * - no_attachments parsed cleanly but no valid attachment found
+ * - unrouted       recipient address couldn't be resolved to an org/client
+ * - failed         parser or storage failure; will retry from DLQ
+ */
+export const emailMessageStatus = pgEnum("email_message_status", [
+  "received",
+  "processing",
+  "processed",
+  "no_attachments",
+  "unrouted",
+  "failed",
+]);
+
+/** email_attachments.status (addendum §3.3). */
+export const emailAttachmentStatus = pgEnum("email_attachment_status", [
+  "received",
+  "accepted",
+  "rejected",
+]);

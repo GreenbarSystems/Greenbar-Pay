@@ -9,6 +9,7 @@
 import "dotenv/config";
 import { getQueue, stopQueue } from "@/lib/queue";
 import { HANDLERS } from "@/jobs";
+import { isInboxEnabled, startInboxPoller, stopInboxPoller } from "@/lib/inbox/sqs";
 
 async function main() {
   const boss = await getQueue();
@@ -32,6 +33,13 @@ async function main() {
     });
   }
 
+  // AP inbox SQS poller runs alongside pg-boss handlers in the same
+  // process — same image, same deploy, same lifecycle. Disabled when
+  // INBOX_SQS_QUEUE_URL is unset (local dev).
+  if (isInboxEnabled()) {
+    void startInboxPoller();
+  }
+
   console.log("[worker] ready");
 
   let shuttingDown = false;
@@ -39,6 +47,7 @@ async function main() {
     if (shuttingDown) return;
     shuttingDown = true;
     console.log(`[worker] ${sig} received, draining…`);
+    await stopInboxPoller();
     await stopQueue();
     process.exit(0);
   };

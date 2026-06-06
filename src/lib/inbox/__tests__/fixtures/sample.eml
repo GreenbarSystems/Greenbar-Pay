@@ -1,0 +1,40 @@
+Return-Path: <vendor@example.com>
+Received: from mail.example.com (mail.example.com [192.0.2.10])
+	by in.invoice-ai.com (Postfix) with ESMTPS;
+	Fri, 5 Jun 2026 19:00:00 +0000 (UTC)
+Message-ID: <test-message-001@example.com>
+Date: Fri, 5 Jun 2026 18:59:00 +0000
+From: ACME Supplies <vendor@example.com>
+To: ap+acme--bigco@in.invoice-ai.com
+Subject: Invoice INV-10492
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="boundary-001"
+
+--boundary-001
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: 7bit
+
+Hello,
+
+Please find attached invoice INV-10492 for $1,353.13.
+
+Thanks,
+ACME Supplies
+
+--boundary-001
+Content-Type: application/pdf; name="invoice-10492.pdf"
+Content-Transfer-Encoding: base64
+Content-Disposition: attachment; filename="invoice-10492.pdf"
+
+JVBERi0xLjQKJeLjz9MKMyAwIG9iago8PC9MZW5ndGggMzQ+PnN0cmVhbQpCVAovRjEgMTIgVGYK
+NzIgNzIwIFRkCihJTlYtMTA0OTIpIFRqCkVUCmVuZHN0cmVhbQplbmRvYmoKMSAwIG9iago8PC9U
+eXBlIC9QYWdlIC9QYXJlbnQgMiAwIFIgL01lZGlhQm94IFswIDAgNjEyIDc5Ml0gL0NvbnRlbnRz
+IDMgMCBSIC9SZXNvdXJjZXMgPDwvRm9udCA8PC9GMSA8PC9UeXBlIC9Gb250IC9TdWJ0eXBlIC9U
+eXBlMSAvQmFzZUZvbnQgL0hlbHZldGljYT4+Pj4+Pj4+CmVuZG9iagoyIDAgb2JqCjw8L1R5cGUg
+L1BhZ2VzIC9LaWRzIFsxIDAgUl0gL0NvdW50IDE+PgplbmRvYmoKNCAwIG9iago8PC9UeXBlIC9D
+YXRhbG9nIC9QYWdlcyAyIDAgUj4+CmVuZG9iagp4cmVmCjAgNQowMDAwMDAwMDAwIDY1NTM1IGYg
+CjAwMDAwMDAwOTYgMDAwMDAgbiAKMDAwMDAwMDI0NCAwMDAwMCBuIAowMDAwMDAwMDE1IDAwMDAw
+IG4gCjAwMDAwMDAyOTQgMDAwMDAgbiAKdHJhaWxlcgo8PC9TaXplIDUgL1Jvb3QgNCAwIFI+Pgpz
+dGFydHhyZWYKMzM5CiUlRU9G
+
+--boundary-001--

@@ -51,6 +51,17 @@ overrides the base PRD where they conflict.
 - `POST /api/ap/review/:id/approve` and `…/reject` with `Idempotency-Key` (§4.6); approve refuses while blocking findings remain
 - RBAC matrix (§1.5) enforced per endpoint; every mutation lands an `audit_events` row with before/after JSON
 
+**Phase 6 — AP inbox ingestion** ✓ shipped (closes the last P0)
+- SES → S3 → SNS → SQS → worker pipeline per addendum §3.1
+- `email_messages` + `email_attachments` tables with RLS (incl. the §3.6 deltas: `raw_message_storage_key`, `routing_address`, `email_message_status` ENUM)
+- Address routing: `ap+<org_slug>--<client_slug>@in.<domain>` parsed in pure code; unknown slugs land as `status='unrouted'`, never silently dropped
+- Idempotency key `sha256(Message-ID || s3_key)` + UNIQUE `(provider, provider_message_id)` makes SES re-deliveries safe
+- MIME parsing via `mailparser`; inline image signatures skipped per §3.3; every part runs the same §2.6 inspector as the upload route
+- Accepted attachments dedup against `documents.content_hash`, write `documents` (`source='email'` + `email_message_id` + `email_attachment_id` provenance), and enqueue `process-document`
+- SQS poller runs alongside pg-boss in the same worker process; opt-in via `INBOX_SQS_QUEUE_URL`. No-op when unset (local dev)
+- Local dev: `pnpm ingest:eml fixtures/example.eml` simulates the SES path without AWS
+- Integration test (vitest + Postgres + MinIO) proves: routed message produces one document; re-ingesting the same key is a no-op; unknown slugs land as `unrouted`
+
 **Phase 5 — Export & pilot readiness** ✓ shipped — **MVP cut line reached**
 - Generic CSV (RFC 4180 quoting, CRLF, Excel-friendly numeric pass-through) + JSON exporters
 - `exports` + `export_items` tables with RLS; `export_format` and `export_status` ENUMs
@@ -95,6 +106,36 @@ apk add poppler-utils
 
 Without `pdftoppm`, scanned PDFs land in `text_extracted` with a
 `rasterize:missing_binary` warning instead of OCR text.
+
+### AP inbox (production wiring, addendum §3)
+
+The worker process polls an SQS queue when `INBOX_SQS_QUEUE_URL` is set.
+Production setup outline:
+
+1. **SES** — verify the domain (`in.<your-domain>`), enable DKIM + SPF, set
+   DMARC `p=quarantine`. Create a receipt rule matching `ap+*@in.<domain>`
+   that writes to an S3 bucket prefix (e.g. `inbound/`) and publishes to
+   an SNS topic.
+2. **S3** — bucket dedicated to inbound mail. SES IAM role gets
+   `PutObject` only on the `inbound/` prefix — no read access (§3.5).
+3. **SNS → SQS** — fan out the SES notification to `ap-inbox-incoming`.
+   Configure visibility timeout = 5 min and `maxReceiveCount = 5` →
+   `ap-inbox-dlq` per §3.4.
+4. **Worker IAM** — `s3:GetObject` on the inbound prefix, `s3:PutObject`
+   on the documents-raw prefix, `sqs:{ReceiveMessage,DeleteMessage}` on
+   the queue. Read-only to existing inbound objects; write-only to the
+   docs prefix.
+5. **DLQ alert** — a Lambda (or scheduled job) posts a Slack alert with
+   metadata only — never body or attachments (§3.4).
+
+Local dev replaces all of the above with the CLI:
+
+```
+pnpm ingest:eml path/to/test.eml --mailbox ap+acme--bigco@in.invoice-ai.com
+```
+
+It uploads the file to MinIO under `inbound/local/<sha>.eml` then calls
+the same `ingestEmlMessage()` the SQS worker would.
 
 ## Tests
 

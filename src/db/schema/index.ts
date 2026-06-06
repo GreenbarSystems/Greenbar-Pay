@@ -9,5 +9,7 @@ export * from "./extractedInvoices";
 export * from "./vendors";
 export * from "./validationResults";
 export * from "./exports";
+export * from "./emailMessages";
+export * from "./emailAttachments";
 export * from "./auditEvents";
 export * from "./apiIdempotencyKeys";
