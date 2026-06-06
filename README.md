@@ -23,6 +23,13 @@ overrides the base PRD where they conflict.
 - Compare-and-set status transitions (§4.5) make retries safe
 - Worker service in docker-compose; same image as web
 
+**Phase 2.1 — PDF-OCR fallback** ✓ shipped
+- `pdftoppm` (poppler-utils) rasterizes scanned PDFs to one PNG per page
+- New `tesseract_pdf` extractor runs Tesseract page-by-page with averaged confidence
+- Job picks the better of `native_pdf` vs `tesseract_pdf` by quality score
+- Rasterizer failures (missing binary, too many pages) surface as structured warnings
+- Worker Dockerfile installs `poppler-utils`
+
 LLM extraction, validation, review queue, and export ship in later phases.
 
 ## Local dev
@@ -38,6 +45,25 @@ pnpm worker:dev                   # worker (separate terminal)
 # OR run everything in containers:
 docker compose --profile app up   # postgres + minio + worker
 ```
+
+### Worker prerequisites
+
+The worker shells out to `pdftoppm` for PDF rasterization. Install it once
+per dev machine:
+
+```
+# macOS
+brew install poppler
+
+# Debian/Ubuntu
+sudo apt-get install poppler-utils
+
+# Alpine (matches the production image)
+apk add poppler-utils
+```
+
+Without `pdftoppm`, scanned PDFs land in `text_extracted` with a
+`rasterize:missing_binary` warning instead of OCR text.
 
 ## Tests
 

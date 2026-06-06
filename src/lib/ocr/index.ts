@@ -29,5 +29,5 @@ export interface TextExtractor {
 }
 
 export { nativePdfExtractor } from "./native-pdf";
-export { tesseractExtractor } from "./tesseract";
+export { tesseractExtractor, tesseractPdfExtractor } from "./tesseract";
 export { scoreText } from "./text-quality";
