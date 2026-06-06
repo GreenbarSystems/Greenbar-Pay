@@ -4,6 +4,7 @@ import { auth, signOut } from "@/lib/auth";
 
 const NAV = [
   { href: "/inbox", label: "AP Inbox" },
+  { href: "/review", label: "Review Queue" },
   { href: "/upload", label: "Upload" },
 ];
 

@@ -40,7 +40,18 @@ overrides the base PRD where they conflict.
 - §4.2 supersede: partial unique index keeps at most one `pending|needs_review` row per document; reviewer-acted rows are immune to upstream retries
 - §4.1 `llm_runs` table logs every dispatch (success, schema fail, provider error, pre-flight reject) with input hash only — never the prompt text
 
-Validation, review queue, and export ship in later phases.
+**Phase 4 — Validation & review queue** ✓ shipped
+- Deterministic validation engine (PRD blocking + warning rules with ±0.02 math tolerance)
+- `vendors` master + Jaccard-token vendor matcher with low / medium / high confidence
+- `validation_results` (delete-then-insert per run) + `vendor_matches` (append-only)
+- `validate-extracted-invoice` job advances docs to `review_required`; PATCH reuses the same engine after edits
+- `/review` queue list with status tabs, warning pills, vendor / total / confidence at a glance
+- `/review/:id` side-by-side: original file preview (signed URL) + editable header + line items + findings + vendor candidates + audit drawer
+- `PATCH /api/ap/review/:id` with `If-Match: <updated_at>` per §4.7 — concurrent edits race-safe at the DB layer (vitest spec proves it)
+- `POST /api/ap/review/:id/approve` and `…/reject` with `Idempotency-Key` (§4.6); approve refuses while blocking findings remain
+- RBAC matrix (§1.5) enforced per endpoint; every mutation lands an `audit_events` row with before/after JSON
+
+Export ships in Phase 5.
 
 ## Local dev
 
