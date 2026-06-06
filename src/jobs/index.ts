@@ -1,0 +1,23 @@
+/**
+ * Job handler registry. The worker entrypoint (scripts/worker.ts) iterates
+ * this list and calls `boss.work(name, opts, handler)` for each.
+ */
+import type PgBoss from "pg-boss";
+import { JOB, type JobPayloads } from "@/lib/queue";
+import { handleProcessDocument } from "./processDocument";
+
+type Handler<N extends keyof JobPayloads> = (
+  job: PgBoss.Job<JobPayloads[N]>,
+) => Promise<unknown>;
+
+export const HANDLERS: Array<{
+  name: keyof JobPayloads;
+  options: PgBoss.WorkOptions;
+  handler: Handler<keyof JobPayloads>;
+}> = [
+  {
+    name: JOB.processDocument,
+    options: { teamSize: 4, teamConcurrency: 2 },
+    handler: handleProcessDocument as Handler<keyof JobPayloads>,
+  },
+];

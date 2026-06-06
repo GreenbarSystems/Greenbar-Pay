@@ -1,12 +1,13 @@
 import { auth } from "@/lib/auth";
 import { withOrg } from "@/db/client";
-import { documents } from "@/db/schema";
-import { desc, eq, and } from "drizzle-orm";
+import { documents, documentExtractions } from "@/db/schema";
+import { desc, eq, and, sql } from "drizzle-orm";
 
 const STATUS_TABS = [
   { key: "all", label: "All" },
   { key: "received", label: "Received" },
   { key: "processing", label: "Processing" },
+  { key: "text_extracted", label: "Text Extracted" },
   { key: "review_required", label: "Needs Review" },
   { key: "approved", label: "Approved" },
   { key: "exported", label: "Exported" },
@@ -28,6 +29,16 @@ export default async function InboxPage({
     (STATUS_TABS.find((t) => t.key === searchParams.status)?.key as Status) ?? "all";
 
   const rows = await withOrg(organizationId, async (tx) => {
+    // Latest-extraction lateral join (§4.1 append-only readers pattern).
+    // Lateral keeps it to one row per document even when retries pile up.
+    const latestExtraction = sql`(
+      select method, text_length, quality_score
+      from document_extractions de
+      where de.document_id = ${documents.id}
+      order by de.created_at desc
+      limit 1
+    )`;
+
     return tx
       .select({
         id: documents.id,
@@ -35,6 +46,9 @@ export default async function InboxPage({
         status: documents.status,
         source: documents.source,
         receivedAt: documents.receivedAt,
+        extractionMethod: sql<string | null>`(${latestExtraction}).method`,
+        textLength: sql<number | null>`(${latestExtraction}).text_length`,
+        qualityScore: sql<string | null>`(${latestExtraction}).quality_score`,
       })
       .from(documents)
       .where(
@@ -92,6 +106,7 @@ export default async function InboxPage({
                 <th className="px-4 py-2 text-left">File</th>
                 <th className="px-4 py-2 text-left">Source</th>
                 <th className="px-4 py-2 text-left">Status</th>
+                <th className="px-4 py-2 text-left">Extraction</th>
                 <th className="px-4 py-2 text-left">Received</th>
               </tr>
             </thead>
@@ -102,6 +117,13 @@ export default async function InboxPage({
                   <td className="px-4 py-2 text-gray-600">{r.source}</td>
                   <td className="px-4 py-2">
                     <StatusBadge status={r.status} />
+                  </td>
+                  <td className="px-4 py-2 text-gray-600">
+                    <ExtractionCell
+                      method={r.extractionMethod}
+                      textLength={r.textLength}
+                      qualityScore={r.qualityScore}
+                    />
                   </td>
                   <td className="px-4 py-2 text-gray-600">
                     {r.receivedAt.toISOString().slice(0, 16).replace("T", " ")}
@@ -124,10 +146,46 @@ function StatusBadge({ status }: { status: string }) {
         ? "bg-red-100 text-red-800"
         : status === "review_required" || status === "validation_failed"
           ? "bg-amber-100 text-amber-800"
-          : "bg-gray-100 text-gray-700";
+          : status === "text_extracted" || status === "llm_extracted"
+            ? "bg-blue-100 text-blue-800"
+            : "bg-gray-100 text-gray-700";
   return (
     <span className={`rounded px-2 py-0.5 text-xs font-medium ${color}`}>
       {status}
     </span>
+  );
+}
+
+function ExtractionCell({
+  method,
+  textLength,
+  qualityScore,
+}: {
+  method: string | null;
+  textLength: number | null;
+  qualityScore: string | null;
+}) {
+  if (!method) return <span className="text-gray-400">—</span>;
+  const score = qualityScore ? Number(qualityScore) : null;
+  const scoreColor =
+    score === null
+      ? "text-gray-500"
+      : score >= 0.6
+        ? "text-green-700"
+        : score >= 0.25
+          ? "text-amber-700"
+          : "text-red-700";
+  return (
+    <div className="flex items-center gap-2 text-xs">
+      <span className="font-mono text-gray-700">{method}</span>
+      <span className="text-gray-400">·</span>
+      <span className="text-gray-600">{textLength ?? 0} chars</span>
+      {score !== null && (
+        <>
+          <span className="text-gray-400">·</span>
+          <span className={scoreColor}>q={score.toFixed(2)}</span>
+        </>
+      )}
+    </div>
   );
 }
