@@ -9,3 +9,4 @@ dist/
 coverage/
 .vercel
 next-env.d.ts
+.commit-msg.tmp
