@@ -51,7 +51,17 @@ overrides the base PRD where they conflict.
 - `POST /api/ap/review/:id/approve` and `…/reject` with `Idempotency-Key` (§4.6); approve refuses while blocking findings remain
 - RBAC matrix (§1.5) enforced per endpoint; every mutation lands an `audit_events` row with before/after JSON
 
-Export ships in Phase 5.
+**Phase 5 — Export & pilot readiness** ✓ shipped — **MVP cut line reached**
+- Generic CSV (RFC 4180 quoting, CRLF, Excel-friendly numeric pass-through) + JSON exporters
+- `exports` + `export_items` tables with RLS; `export_format` and `export_status` ENUMs
+- `POST /api/ap/exports` with `Idempotency-Key` (§4.6); creates the row up-front (§4.5 idempotency anchor), enqueues `export-invoices`, refuses when any selected invoice isn't `approved`
+- `export-invoices` job: compare-and-set on `exports.status`; re-confirms approval at run time; renders + uploads; advances each `extracted_invoices.review_status` and `documents.status` `approved → exported` via compare-and-set
+- `GET /api/ap/exports/:id/download` redirects to a 120s signed URL
+- `/review?status=approved` gets multi-select + bulk Export action (CSV / JSON picker)
+- `/exports` history page with status, size, item count, download link, error tooltip
+- `/dashboard` pilot metrics — uploaded, reached extraction, awaiting review, approved, extraction method mix, LLM success rate + failure breakdown, confidence distribution, duplicates caught, export success rate
+
+MVP scope (PRD §"MVP Cut Line") is now satisfied. Post-MVP: GL coding, PO matching, ERP draft-bill connectors, payment approvals, multi-level workflow.
 
 ## Local dev
 

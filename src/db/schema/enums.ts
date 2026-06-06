@@ -56,3 +56,14 @@ export const llmRunStatus = pgEnum("llm_run_status", [
   "quota_exceeded",
   "circuit_open",
 ]);
+
+/** export.format — generic CSV/JSON ship first; ERP CSVs later. */
+export const exportFormat = pgEnum("export_format", ["csv", "json"]);
+
+/** export.status — created up-front by the API; the job advances. */
+export const exportStatus = pgEnum("export_status", [
+  "created",
+  "running",
+  "completed",
+  "failed",
+]);

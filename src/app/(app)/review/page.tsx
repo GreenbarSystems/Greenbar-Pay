@@ -7,6 +7,7 @@ import {
   validationResults,
 } from "@/db/schema";
 import { and, desc, eq, inArray, sql } from "drizzle-orm";
+import ApprovedExporter from "./ApprovedExporter";
 
 const STATUS_TABS = [
   { key: "needs_review", label: "Needs Review" },
@@ -106,6 +107,16 @@ export default async function ReviewListPage({
         <div className="rounded-md border border-dashed border-gray-300 bg-white p-12 text-center text-gray-500">
           Nothing in this view.
         </div>
+      ) : active === "approved" ? (
+        <ApprovedExporter
+          rows={rows.map((r) => ({
+            id: r.id,
+            vendorName: r.vendorName,
+            invoiceNumber: r.invoiceNumber,
+            total: r.total,
+            currency: r.currency,
+          }))}
+        />
       ) : (
         <div className="overflow-hidden rounded-md border border-gray-200 bg-white">
           <table className="w-full text-sm">

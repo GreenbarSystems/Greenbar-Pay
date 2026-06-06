@@ -47,6 +47,7 @@ export const JOB = {
   processDocument: "process-document",
   extractInvoiceData: "extract-invoice-data",
   validateExtractedInvoice: "validate-extracted-invoice",
+  exportInvoices: "export-invoices",
 } as const;
 
 export type JobPayloads = {
@@ -56,4 +57,5 @@ export type JobPayloads = {
     extractedInvoiceId: string;
     organizationId: string;
   };
+  [JOB.exportInvoices]: { exportId: string; organizationId: string };
 };
