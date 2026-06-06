@@ -4,10 +4,9 @@ AP invoice intake, OCR, and LLM extraction with a human review queue. See
 `docs/ap-invoice-ai-mvp-technical-prd-merged.md` for the PRD; the addendum
 overrides the base PRD where they conflict.
 
-## Phase 1 status
+## Status
 
-Foundation only:
-
+**Phase 1 — Foundation** ✓ shipped
 - Next.js App Router + Tailwind
 - Postgres + Drizzle with **RLS enabled on every tenant-scoped table** (addendum §1.2)
 - `withOrg(orgId, fn)` helper; raw Drizzle access blocked by ESLint (§1.4)
@@ -16,16 +15,28 @@ Foundation only:
 - Upload endpoint with §2.6 file-safety controls (size, MIME sniff, hash; AV + qpdf hooks stubbed)
 - AP inbox page that lists documents by status
 
-OCR, LLM extraction, validation, review queue, and export ship in later phases.
+**Phase 2 — OCR & text pipeline** ✓ shipped
+- pg-boss background queue (uses `FOR UPDATE SKIP LOCKED`, addendum §4.4)
+- `process-document` job: native PDF extraction → Tesseract fallback for image inputs
+- `document_extractions` append-only table with RLS (§4.1)
+- Text quality scoring drives the OCR-fallback decision
+- Compare-and-set status transitions (§4.5) make retries safe
+- Worker service in docker-compose; same image as web
+
+LLM extraction, validation, review queue, and export ship in later phases.
 
 ## Local dev
 
 ```
 cp .env.example .env
-docker compose up -d            # postgres + minio
+docker compose up -d              # postgres + minio
 pnpm install
-pnpm db:migrate                 # applies schema + RLS policies + creates app_user / app_worker
-pnpm dev
+pnpm db:migrate                   # schema + RLS + app_user / app_worker roles
+pnpm dev                          # web at http://localhost:3000
+pnpm worker:dev                   # worker (separate terminal)
+
+# OR run everything in containers:
+docker compose --profile app up   # postgres + minio + worker
 ```
 
 ## Tests

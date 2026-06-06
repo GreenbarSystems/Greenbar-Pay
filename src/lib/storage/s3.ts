@@ -34,6 +34,18 @@ export const s3Storage: ObjectStorage = {
       }),
     );
   },
+  async getObject(key) {
+    const res = await client.send(
+      new GetObjectCommand({ Bucket: bucket, Key: key }),
+    );
+    if (!res.Body) throw new Error(`storage: empty body for ${key}`);
+    // Body is a Node Readable in this SDK runtime.
+    const chunks: Buffer[] = [];
+    for await (const chunk of res.Body as AsyncIterable<Uint8Array>) {
+      chunks.push(Buffer.from(chunk));
+    }
+    return Buffer.concat(chunks);
+  },
   async getSignedUrl(key, expiresInSeconds = 300) {
     return getSignedUrl(
       client,

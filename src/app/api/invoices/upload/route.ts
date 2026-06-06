@@ -30,6 +30,7 @@ import {
   readIdempotencyKey,
   writeIdempotencyKey,
 } from "@/lib/idempotency";
+import { getQueue, JOB } from "@/lib/queue";
 
 const EXT_BY_MIME: Record<string, string> = {
   "application/pdf": "pdf",
@@ -167,6 +168,15 @@ export async function POST(req: Request) {
       body: inspected.buf,
       contentType: inspected.mimeType,
     });
+
+    // Enqueue extraction. Job is keyed on documentId — the handler's
+    // compare-and-set on status makes duplicate deliveries safe (§4.4/§4.5).
+    const boss = await getQueue();
+    await boss.send(
+      JOB.processDocument,
+      { documentId: result.document.id, organizationId },
+      { singletonKey: `process-document:${result.document.id}` },
+    );
   }
 
   const body = {

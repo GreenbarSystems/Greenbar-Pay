@@ -9,6 +9,9 @@ export interface ObjectStorage {
     contentType?: string;
   }): Promise<void>;
 
+  /** Stream the bytes back. Worker uses this to re-read the original file. */
+  getObject(key: string): Promise<Buffer>;
+
   /** Pre-signed GET URL, default 5-minute TTL. */
   getSignedUrl(key: string, expiresInSeconds?: number): Promise<string>;
 
@@ -35,4 +38,16 @@ export function documentStorageKey(args: {
   const mm = String(d.getUTCMonth() + 1).padStart(2, "0");
   const ext = args.extension.replace(/^\./, "");
   return `documents/${args.organizationId}/${yyyy}/${mm}/${args.documentId}.${ext}`;
+}
+
+/**
+ * Raw extracted text key. One per attempt — the suffix (extractionId)
+ * keeps retries from clobbering prior text. Append-only by construction.
+ */
+export function rawTextStorageKey(args: {
+  organizationId: string;
+  documentId: string;
+  extractionId: string;
+}): string {
+  return `extractions/${args.organizationId}/${args.documentId}/${args.extractionId}.txt`;
 }
