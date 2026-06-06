@@ -1,0 +1,42 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  lint-and-test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: app_admin
+          POSTGRES_PASSWORD: app_admin_pw
+          POSTGRES_DB: greenbar
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U app_admin -d greenbar"
+          --health-interval 3s
+          --health-timeout 3s
+          --health-retries 20
+    env:
+      DATABASE_URL: postgres://app_user:app_user_pw@localhost:5432/greenbar
+      DATABASE_URL_WORKER: postgres://app_worker:app_worker_pw@localhost:5432/greenbar
+      DATABASE_URL_ADMIN: postgres://app_admin:app_admin_pw@localhost:5432/greenbar
+      AUTH_SECRET: ci-only-not-secret
+      S3_BUCKET_DOCUMENTS: greenbar-documents
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - run: npm install --no-audit --no-fund
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm run db:generate
+      - run: npm run db:migrate
+      # Addendum §1.6 — cross-tenant RLS gate.
+      - run: npm run test:rls
+      - run: npm test
