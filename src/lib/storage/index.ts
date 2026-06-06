@@ -51,3 +51,15 @@ export function rawTextStorageKey(args: {
 }): string {
   return `extractions/${args.organizationId}/${args.documentId}/${args.extractionId}.txt`;
 }
+
+/**
+ * Export file key. One per export row — the export_id makes the key
+ * idempotent across worker retries.
+ */
+export function exportStorageKey(args: {
+  organizationId: string;
+  exportId: string;
+  format: "csv" | "json";
+}): string {
+  return `exports/${args.organizationId}/${args.exportId}.${args.format}`;
+}

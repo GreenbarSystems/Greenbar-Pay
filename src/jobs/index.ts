@@ -7,6 +7,7 @@ import { JOB, type JobPayloads } from "@/lib/queue";
 import { handleProcessDocument } from "./processDocument";
 import { handleExtractInvoiceData } from "./extractInvoiceData";
 import { handleValidateExtractedInvoice } from "./validateExtractedInvoice";
+import { handleExportInvoices } from "./exportInvoices";
 
 type Handler<N extends keyof JobPayloads> = (
   job: PgBoss.Job<JobPayloads[N]>,
@@ -33,5 +34,10 @@ export const HANDLERS: Array<{
     name: JOB.validateExtractedInvoice,
     options: { teamSize: 4, teamConcurrency: 4 },
     handler: handleValidateExtractedInvoice as Handler<keyof JobPayloads>,
+  },
+  {
+    name: JOB.exportInvoices,
+    options: { teamSize: 2, teamConcurrency: 2 },
+    handler: handleExportInvoices as Handler<keyof JobPayloads>,
   },
 ];
