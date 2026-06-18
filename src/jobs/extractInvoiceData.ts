@@ -19,7 +19,7 @@
  * to `review_required`. For Phase 3 we stop after llm_extracted.
  */
 import type PgBoss from "pg-boss";
-import { and, eq, inArray, desc } from "drizzle-orm";
+import { and, eq, inArray, desc, sql } from "drizzle-orm";
 import { withOrgAsWorker } from "@/db/client";
 import {
   documents,
@@ -35,7 +35,7 @@ import {
   MAX_INPUT_CHARS,
   type DispatchOutcome,
 } from "@/lib/llm";
-import { scrub } from "@/lib/llm/scrub";
+import { scrub, scrubError } from "@/lib/llm/scrub";
 import type { JobPayloads } from "@/lib/queue";
 import { JOB, getQueue } from "@/lib/queue";
 
@@ -146,13 +146,19 @@ async function persistOutcome(
 
     // Common llm_runs row fields.
     const runStatus = mapOutcomeToRunStatus(outcome);
+    // PR7 — review #1: every error message that lands in llm_runs.error_message
+    // gets passed through scrubError AND length-capped. ProviderError already
+    // scrubs in its constructor, but defense-in-depth: re-scrubbing is cheap
+    // and survives a future provider that bypasses our wrapper. The compliance
+    // promise is that customer payload only ever lives in output_json — error
+    // strings have no business carrying vendor names or prompt fragments.
     const errorMessage =
       outcome.kind === "schema_failed"
         ? "schema validation failed after retry"
         : outcome.kind === "provider_error"
-          ? outcome.error.message
+          ? scrubError(outcome.error).message.slice(0, 500)
           : outcome.kind === "non_compliant_model"
-            ? outcome.error.message
+            ? `non_compliant_model: ${scrubError(outcome.error).message.slice(0, 300)}`
             : outcome.kind === "text_too_large"
               ? `input ${charCount} chars exceeds max ${MAX_INPUT_CHARS}`
               : outcome.kind === "quota_exceeded"
@@ -185,7 +191,7 @@ async function persistOutcome(
       // §4.2 supersede.
       await tx
         .update(extractedInvoices)
-        .set({ reviewStatus: "superseded", updatedAt: new Date() })
+        .set({ reviewStatus: "superseded", updatedAt: sql`now()` })
         .where(
           and(
             eq(extractedInvoices.documentId, documentId),

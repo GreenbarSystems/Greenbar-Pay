@@ -21,7 +21,7 @@ import { BRIEFING_TOOL_JSON_SCHEMA } from "./briefing-card-schema";
 import type { BuiltPrompt } from "./prompt";
 
 export const BRIEFING_PROMPT_NAME = "briefing-card";
-export const BRIEFING_PROMPT_VERSION = "2026-06-08";
+export const BRIEFING_PROMPT_VERSION = "2026-06-17";
 
 export const BRIEFING_SYSTEM_PROMPT = `You generate an approver-facing Briefing Card for an accounts-payable invoice.
 
@@ -58,6 +58,16 @@ Rules:
 - Plain English the approver can act on. No technical jargon, no
   references to internal systems or prompt names.
 - Never invent values not present in the inputs.
+- PII / payload hygiene (applies to glRationale, deltaSummary,
+  riskJustification, and every anomalyFlags message):
+    * Never write the vendor name. Use generic phrases like
+      "this vendor", "the vendor", "their prior invoice".
+    * Never write invoice numbers, PO numbers, addresses, EINs,
+      tax IDs, account numbers, or routing numbers.
+    * Refer to amounts in approximate ranges if directly quoting
+      would identify the invoice (e.g. "about $4k" not "$3,987.42").
+  These fields persist in plain text and surface in evidence packets;
+  they must be re-readable without leaking customer payload.
 - Return only the tool call.`;
 
 export interface BriefingPromptInput {

@@ -24,6 +24,15 @@ import { vendors, vendorMatches, auditEvents } from "@/db/schema";
 import { desc } from "drizzle-orm";
 import { normalizeVendor } from "@/lib/validation";
 
+/**
+ * PR7 — review #2: hard cap on vendors.aliases to bound row size, the
+ * jaccard matcher's inner loop, and any future GIN index. 20 is
+ * comfortable for legitimate vendor spelling variants seen in pilot
+ * (avg < 3) while preventing unbounded growth from misbehaving OCR or
+ * hostile inputs.
+ */
+const MAX_VENDOR_ALIASES = 20;
+
 export interface BootstrapInput {
   organizationId: string;
   clientId: string | null;
@@ -89,6 +98,14 @@ export async function bootstrapVendorOnApprove(
   // Branch B — fuzzy (jaccard) match that the reviewer approved. Promote
   // the extracted variant name into the vendor's aliases so the next
   // invoice with this spelling resolves exact.
+  //
+  // PR7 — review #2: aliases is bounded to MAX_ALIASES. Without a cap, a
+  // misbehaving OCR pipeline (or hostile input) can grow the array
+  // unboundedly, bloating row size, the jaccard matcher's inner loop, and
+  // any future GIN index. The dedup-and-trim runs in SQL so concurrent
+  // approves can't race past the bound. FIFO eviction: when we append a
+  // 21st alias, the SQL keeps the last 20 (most-recently-promoted), since
+  // those are the spellings still showing up in practice.
   if (
     latestMatch?.vendorId &&
     latestMatch.matchMethod === "jaccard"
@@ -97,8 +114,15 @@ export async function bootstrapVendorOnApprove(
       .update(vendors)
       .set({
         aliases: sql`(
-          select array_agg(distinct a)
-          from unnest(array_append(${vendors.aliases}, ${normalized}::text)) as a
+          select coalesce(array_agg(a order by mx desc), array[]::text[])
+          from (
+            select a, max(ord) as mx
+            from unnest(array_append(${vendors.aliases}, ${normalized}::text))
+              with ordinality as t(a, ord)
+            group by a
+            order by max(ord) desc
+            limit ${MAX_VENDOR_ALIASES}
+          ) keep
         )`,
       })
       .where(eq(vendors.id, latestMatch.vendorId));
