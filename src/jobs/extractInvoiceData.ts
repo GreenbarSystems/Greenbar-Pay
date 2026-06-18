@@ -295,6 +295,25 @@ async function persistOutcome(
         ),
       );
 
+    // PR3 — review #10: supersede ANY stale active extraction row when a
+    // later run fails. Without this, a successful Phase 3 run followed
+    // by a retry that hits text_too_large/quota/circuit/provider/schema
+    // left the prior extracted_invoices row visible as pending|needs_review
+    // — a reviewer could approve old extracted data while the worker
+    // had already given up. Reviewer-acted rows (approved/rejected/
+    // exported) stay immune (§4.2): the supersede only touches the
+    // pending|needs_review tail. Records the reason on the audit row.
+    const supersededRows = await tx
+      .update(extractedInvoices)
+      .set({ reviewStatus: "superseded", updatedAt: new Date() })
+      .where(
+        and(
+          eq(extractedInvoices.documentId, documentId),
+          inArray(extractedInvoices.reviewStatus, ["pending", "needs_review"]),
+        ),
+      )
+      .returning({ id: extractedInvoices.id });
+
     await tx.insert(auditEvents).values({
       organizationId,
       actorType: "worker",
@@ -306,6 +325,8 @@ async function persistOutcome(
         runStatus,
         // Error message is already scrubbed via the outcome path.
         // No payload here.
+        supersededInvoiceIds: supersededRows.map((r) => r.id),
+        supersedeReason: `extract-invoice-data: ${runStatus}`,
       },
     });
   });

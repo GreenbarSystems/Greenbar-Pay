@@ -76,3 +76,41 @@ export function requirePermission(role: UserRole, permission: Permission): void 
     throw err;
   }
 }
+
+/**
+ * PR3 — review #16: load the per-client role for (userId, clientId)
+ * from user_client_access and compose with the org-wide role.
+ *
+ * Prior to this, `effectiveRole` was defined but never called — every
+ * endpoint checked the org role directly, silently ignoring per-client
+ * grants. A viewer org-role user granted `reviewer` on one client
+ * couldn't approve invoices for that client.
+ *
+ * Callers pass the active tx so the lookup is RLS-scoped to the user's
+ * org. Returns the composed role; pass it to `requirePermission`.
+ */
+import { and, eq } from "drizzle-orm";
+import type { Tx } from "@/db/client";
+import { userClientAccess } from "@/db/schema";
+
+export async function loadEffectiveRole(
+  tx: Tx,
+  args: {
+    userId: string;
+    clientId: string | null;
+    orgRole: UserRole;
+  },
+): Promise<UserRole> {
+  if (!args.clientId) return args.orgRole;
+  const [row] = await tx
+    .select({ role: userClientAccess.role })
+    .from(userClientAccess)
+    .where(
+      and(
+        eq(userClientAccess.userId, args.userId),
+        eq(userClientAccess.clientId, args.clientId),
+      ),
+    )
+    .limit(1);
+  return effectiveRole(args.orgRole, (row?.role ?? null) as UserRole | null);
+}

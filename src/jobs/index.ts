@@ -19,8 +19,14 @@ export const HANDLERS: Array<{
   handler: Handler<keyof JobPayloads>;
 }> = [
   {
+    // PR3 — review #12: teamConcurrency capped at 1. Tesseract.js's worker
+    // is not reentrant; with concurrency 2 the second job's worker.recognize
+    // could interleave with the first, producing empty extractions or
+    // mixed text. teamSize 4 still lets four documents process serially
+    // per worker process; bursts queue. A proper Tesseract worker pool is
+    // a PR4 perf optimization once we measure real throughput.
     name: JOB.processDocument,
-    options: { teamSize: 4, teamConcurrency: 2 },
+    options: { teamSize: 4, teamConcurrency: 1 },
     handler: handleProcessDocument as Handler<keyof JobPayloads>,
   },
   {

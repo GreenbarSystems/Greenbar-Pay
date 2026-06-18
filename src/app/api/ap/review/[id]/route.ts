@@ -26,7 +26,7 @@ import { z } from "zod";
 import { auth } from "@/lib/auth";
 import { withOrg } from "@/db/client";
 import { extractedInvoices, auditEvents } from "@/db/schema";
-import { requirePermission } from "@/lib/rbac";
+import { can, loadEffectiveRole } from "@/lib/rbac";
 import { runValidationInTx } from "@/lib/validation/run";
 import { requireUuid } from "@/lib/route-helpers";
 import { withIdempotency } from "@/lib/review/idempotencyWrap";
@@ -72,11 +72,8 @@ export async function PATCH(
   if (!session?.user) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   const { organizationId, role, id: userId } = session.user;
 
-  try {
-    requirePermission(role, "invoice.edit");
-  } catch (err) {
-    return NextResponse.json({ error: (err as Error).message }, { status: 403 });
-  }
+  // PR3 — review #16: org-role fast path + per-client elevation inside tx.
+  const hasOrgPermission = can(role, "invoice.edit");
 
   const ifMatch = req.headers.get("If-Match");
   if (!ifMatch) {
@@ -133,6 +130,24 @@ export async function PATCH(
             status: 409,
             body: { error: "terminal_status", status: before.reviewStatus },
           };
+        }
+
+        // PR3 — per-client RBAC fallback when org role denied.
+        if (!hasOrgPermission) {
+          const effective = await loadEffectiveRole(tx, {
+            userId,
+            clientId: before.clientId,
+            orgRole: role,
+          });
+          if (!can(effective, "invoice.edit")) {
+            return {
+              status: 403,
+              body: {
+                error: "forbidden",
+                message: `${effective} lacks invoice.edit`,
+              },
+            };
+          }
         }
 
         // Compare-and-set on updated_at (§4.7).

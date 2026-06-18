@@ -54,6 +54,28 @@ export async function runValidationInTx(
     documentId: string;
   },
 ): Promise<RunValidationResult> {
+  // PR3 — review #13: serialize concurrent runs against the same invoice.
+  //
+  // A validate-extracted-invoice job retry can race a PATCH-triggered
+  // revalidation. Both would soft-supersede (no rows match) → both
+  // insert → two "active" rows for one entity, with the approve route
+  // picking the more recent by created_at. With same-millisecond
+  // timestamps the tie-breaker is undefined.
+  //
+  // pg_advisory_xact_lock holds the lock until the transaction commits
+  // or rolls back, so the second tx blocks at this point and processes
+  // the row only AFTER the first tx's INSERT + UPDATE land. Keyed on
+  // the hash of the entity UUID so distinct invoices don't contend.
+  //
+  // hashtextextended takes a bigint salt; 0 is fine since the key
+  // space is per-entity-UUID and collisions across invoices only mean
+  // serialization, never correctness loss.
+  await tx.execute(sql`
+    select pg_advisory_xact_lock(
+      hashtextextended('validation:' || ${args.extractedInvoiceId}::text, 0)
+    )
+  `);
+
   // 1. Load the invoice + lines.
   const [invoice] = await tx
     .select()
