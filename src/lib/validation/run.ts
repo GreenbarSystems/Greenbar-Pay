@@ -7,12 +7,13 @@
  *   - load extracted invoice + lines + latest extraction text length;
  *   - load prior-approved (vendor, invoice_number) pairs for duplicate check;
  *   - load vendor candidates and run matchVendor();
- *   - delete prior validation_results + vendor_matches for this row;
+ *   - SOFT-supersede prior validation_results (UPDATE … SET superseded_at)
+ *     so the evidence chain stays intact (PR2);
  *   - insert fresh rows.
  *
  * Returns the findings so the caller can decide review_status transitions.
  */
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, isNull, sql } from "drizzle-orm";
 import type { Tx } from "@/db/client";
 import {
   extractedInvoices,
@@ -138,13 +139,17 @@ export async function runValidationInTx(
     textLength: latestExtraction?.textLength ?? null,
   });
 
-  // 6. Persist — delete-then-insert (§4.5 pattern for this table).
+  // 6. Persist — soft-supersede prior active row(s), then insert fresh.
+  //    PR2: hard DELETE destroyed prior-blocking evidence (review #4).
+  //    The active view is WHERE superseded_at IS NULL (indexed).
   await tx
-    .delete(validationResults)
+    .update(validationResults)
+    .set({ supersededAt: sql`now()` })
     .where(
       and(
         eq(validationResults.entityType, "extracted_invoice"),
         eq(validationResults.entityId, args.extractedInvoiceId),
+        isNull(validationResults.supersededAt),
       ),
     );
 

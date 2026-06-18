@@ -68,6 +68,9 @@ export default async function DashboardPage() {
       .where(
         and(
           eq(validationResults.organizationId, organizationId),
+          // PR2: validation_results is append-only — count only the
+          // active row per invoice, not every superseded copy.
+          sql`${validationResults.supersededAt} is null`,
           sql`${validationResults.errorsJson} @> '[{"code":"duplicate_invoice"}]'::jsonb`,
         ),
       );

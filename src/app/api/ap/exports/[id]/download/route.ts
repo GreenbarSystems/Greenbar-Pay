@@ -8,7 +8,7 @@ import { NextResponse } from "next/server";
 import { and, eq } from "drizzle-orm";
 import { auth } from "@/lib/auth";
 import { withOrg } from "@/db/client";
-import { exports as exportsTable } from "@/db/schema";
+import { exports as exportsTable, auditEvents } from "@/db/schema";
 import { requirePermission } from "@/lib/rbac";
 import { storage } from "@/lib/storage";
 import { requireUuid } from "@/lib/route-helpers";
@@ -56,6 +56,31 @@ export async function GET(
     return NextResponse.json(
       { error: "not_ready", status: row.status },
       { status: 409 },
+    );
+  }
+
+  // PR2 — review #21: an auditor needs to know who pulled an export and
+  // when. Wrapped in try/catch so an audit-row failure cannot break the
+  // download — the cost of a missed audit row is preferable to denying
+  // the download. (If DB writes start failing here, that's its own alert.)
+  try {
+    await withOrg(organizationId, async (tx) => {
+      await tx.insert(auditEvents).values({
+        organizationId,
+        actorType: "user",
+        actorId: session.user.id,
+        action: "export.downloaded",
+        entityType: "export",
+        entityId: params.id,
+        metadataJson: {
+          format: row.format,
+          ttlSeconds: SIGNED_URL_TTL_SECONDS,
+        },
+      });
+    });
+  } catch (err) {
+    console.warn(
+      `[export-download] audit insert failed for export=${params.id}; proceeding with redirect`,
     );
   }
 

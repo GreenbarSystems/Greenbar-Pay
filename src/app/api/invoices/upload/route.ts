@@ -16,7 +16,7 @@ import { NextResponse } from "next/server";
 import { eq } from "drizzle-orm";
 import { auth } from "@/lib/auth";
 import { withOrg } from "@/db/client";
-import { documents } from "@/db/schema";
+import { documents, auditEvents } from "@/db/schema";
 import { requirePermission } from "@/lib/rbac";
 import {
   inspectUpload,
@@ -126,6 +126,25 @@ export async function POST(req: Request) {
     });
 
     if (existing) {
+      // PR2 — review #20: the chain of custody used to begin at
+      // `document.text_extracted` (Phase 2 audit), leaving no record of
+      // who submitted what at the entry point. Record the dedup retry
+      // too so an auditor can trace re-submission attempts back to
+      // an actor + timestamp + hash.
+      await tx.insert(auditEvents).values({
+        organizationId,
+        actorType: "user",
+        actorId: userId,
+        action: "document.upload_dedup",
+        entityType: "document",
+        entityId: existing.id,
+        metadataJson: {
+          filename: file.name,
+          contentHash: inspected.contentHash,
+          mimeType: inspected.mimeType,
+          byteSize: inspected.byteSize,
+        },
+      });
       return { dedup: true as const, document: existing };
     }
 
@@ -155,6 +174,25 @@ export async function POST(req: Request) {
       .update(documents)
       .set({ storageKey: key })
       .where(eq(documents.id, inserted.id));
+
+    // PR2 — review #20: chain of custody starts here. createdBy + filename
+    // + content hash give an auditor everything they need to bind the
+    // upload to an actor before any extraction has run.
+    await tx.insert(auditEvents).values({
+      organizationId,
+      actorType: "user",
+      actorId: userId,
+      action: "document.uploaded",
+      entityType: "document",
+      entityId: inserted.id,
+      metadataJson: {
+        filename: file.name,
+        contentHash: inspected.contentHash,
+        mimeType: inspected.mimeType,
+        byteSize: inspected.byteSize,
+        clientId,
+      },
+    });
 
     return {
       dedup: false as const,

@@ -133,6 +133,10 @@ export default function ReviewDetailClient(props: Props) {
         headers: {
           "Content-Type": "application/json",
           "If-Match": form.updatedAt,
+          // PR2: client-generated UUID makes network retries replay-safe
+          // (server caches the prior response for 24h, avoiding phantom
+          // audit rows from duplicate deliveries).
+          "Idempotency-Key": crypto.randomUUID(),
         },
         body: JSON.stringify(body),
       });

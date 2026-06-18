@@ -9,7 +9,7 @@ import {
   vendorMatches,
   auditEvents,
 } from "@/db/schema";
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, isNull } from "drizzle-orm";
 import { storage } from "@/lib/storage";
 import ReviewDetailClient from "./ReviewDetailClient";
 
@@ -47,6 +47,8 @@ export default async function ReviewDetailPage({
       .where(eq(extractedInvoiceLines.extractedInvoiceId, invoice.id))
       .orderBy(extractedInvoiceLines.lineNumber);
 
+    // PR2: filter on superseded_at IS NULL — prior runs are preserved
+    // but only the active row drives UI state.
     const [latestValidation] = await tx
       .select()
       .from(validationResults)
@@ -54,6 +56,7 @@ export default async function ReviewDetailPage({
         and(
           eq(validationResults.entityType, "extracted_invoice"),
           eq(validationResults.entityId, invoice.id),
+          isNull(validationResults.supersededAt),
         ),
       )
       .orderBy(desc(validationResults.createdAt))

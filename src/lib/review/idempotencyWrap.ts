@@ -1,7 +1,8 @@
 /**
- * Shared Idempotency-Key wrapper for the small mutating endpoints
- * (approve, reject, future export). Mirrors the upload route's pattern
- * but factored out so we don't repeat the request-hash dance.
+ * Shared Idempotency-Key wrapper for mutating endpoints (upload,
+ * approve, reject, export, PATCH review). Method is now explicit so
+ * the same key replayed against a different verb hashes differently
+ * — PR2 wires PATCH through this same wrapper.
  */
 import { NextResponse } from "next/server";
 import {
@@ -16,9 +17,10 @@ export async function withIdempotency<T>(
   path: string,
   body: unknown,
   handler: () => Promise<{ status: number; body: T }>,
+  method: string = req.method,
 ): Promise<NextResponse> {
   const key = req.headers.get("Idempotency-Key");
-  const requestHash = key ? hashRequest("POST", path, body) : "";
+  const requestHash = key ? hashRequest(method, path, body) : "";
 
   if (key) {
     const hit = await readIdempotencyKey(organizationId, key, requestHash);

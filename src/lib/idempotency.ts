@@ -71,7 +71,10 @@ export async function writeIdempotencyKey(
         responseStatus: response.status,
         responseBody: response.body as object,
       })
-      .onConflictDoNothing({ target: apiIdempotencyKeys.key });
+      // PR2: PK is (organization_id, key); ON CONFLICT target follows.
+      .onConflictDoNothing({
+        target: [apiIdempotencyKeys.organizationId, apiIdempotencyKeys.key],
+      });
   };
   if (tx) await insert(tx);
   else await withOrg(organizationId, insert);
