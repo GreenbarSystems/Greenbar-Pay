@@ -11,7 +11,7 @@
 import { createWorker, type Worker } from "tesseract.js";
 import type { ExtractionResult, TextExtractor } from ".";
 import { scoreText } from "./text-quality";
-import { rasterizePdf, RasterizeError } from "./pdf-rasterize";
+import { rasterizePdfPages, RasterizeError } from "./pdf-rasterize";
 
 let workerPromise: Promise<Worker> | null = null;
 
@@ -50,26 +50,58 @@ export const tesseractPdfExtractor: TextExtractor = {
   async extract({ mimeType, bytes }) {
     if (mimeType !== "application/pdf") return null;
 
-    let pages;
+    const worker = await getWorker();
+    const pageTexts: string[] = [];
+    let pageCount = 0;
+    let confidenceSum = 0;
+    let confidenceCount = 0;
+    let wordCount = 0;
+    let lineCount = 0;
+
+    // PR4 — review #23: stream pages one at a time. Each page buffer is
+    // GC-eligible as soon as worker.recognize returns; peak memory is
+    // ~1 page in flight regardless of doc length.
+    //
+    // Sequential (not parallel) because tesseract.js's single worker
+    // is not reentrant. A worker pool helps for >10-page docs; most
+    // invoices are 1–3 pages — revisit when we see real throughput data.
     try {
-      pages = await rasterizePdf(bytes);
+      for await (const page of rasterizePdfPages(bytes)) {
+        const { data } = await worker.recognize(page.png);
+        const text = (data.text ?? "").trim();
+        // Page markers help downstream LLM keep line-item context grouped.
+        pageTexts.push(`--- page ${page.pageNumber} ---\n${text}`);
+        if (typeof data.confidence === "number") {
+          confidenceSum += data.confidence;
+          confidenceCount += 1;
+        }
+        wordCount += Array.isArray(data.words) ? data.words.length : 0;
+        lineCount += Array.isArray(data.lines) ? data.lines.length : 0;
+        pageCount += 1;
+      }
     } catch (err) {
       if (err instanceof RasterizeError) {
-        // Bubble structured info into the extraction record so the review
-        // queue shows a meaningful reason rather than an opaque failure.
+        // Surface structured info to the extraction record so the
+        // review queue shows a meaningful reason. May have already
+        // processed a few pages before the error — keep what we have
+        // and tag the failure.
         return {
           method: "tesseract_pdf",
           provider: "pdftoppm+tesseract.js",
-          text: "",
+          text: pageTexts.join("\n\n").trim(),
           qualityScore: 0,
           averageConfidence: null,
-          metadata: { rasterizeError: err.code, message: err.message },
+          metadata: {
+            rasterizeError: err.code,
+            message: err.message,
+            partialPageCount: pageCount,
+          },
         } satisfies ExtractionResult;
       }
       throw err;
     }
 
-    if (pages.length === 0) {
+    if (pageCount === 0) {
       return {
         method: "tesseract_pdf",
         provider: "pdftoppm+tesseract.js",
@@ -78,28 +110,6 @@ export const tesseractPdfExtractor: TextExtractor = {
         averageConfidence: null,
         metadata: { reason: "no_pages_rendered" },
       } satisfies ExtractionResult;
-    }
-
-    const worker = await getWorker();
-    const pageTexts: string[] = [];
-    let confidenceSum = 0;
-    let confidenceCount = 0;
-    let wordCount = 0;
-    let lineCount = 0;
-
-    // Sequential, not parallel: tesseract.js's single worker is not
-    // reentrant. A worker pool helps for >10 pages; most invoices are 1–3.
-    for (const page of pages) {
-      const { data } = await worker.recognize(page.png);
-      const text = (data.text ?? "").trim();
-      // Page markers help downstream LLM keep line-item context grouped.
-      pageTexts.push(`--- page ${page.pageNumber} ---\n${text}`);
-      if (typeof data.confidence === "number") {
-        confidenceSum += data.confidence;
-        confidenceCount += 1;
-      }
-      wordCount += Array.isArray(data.words) ? data.words.length : 0;
-      lineCount += Array.isArray(data.lines) ? data.lines.length : 0;
     }
 
     const text = pageTexts.join("\n\n").trim();
@@ -111,7 +121,7 @@ export const tesseractPdfExtractor: TextExtractor = {
       averageConfidence:
         confidenceCount > 0 ? confidenceSum / confidenceCount / 100 : null,
       metadata: {
-        pageCount: pages.length,
+        pageCount,
         words: wordCount,
         lines: lineCount,
       },

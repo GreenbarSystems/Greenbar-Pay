@@ -33,16 +33,25 @@ export interface RasterizedPage {
 }
 
 /**
- * Renders every page of the PDF to PNG. Yields rasterized pages as an array
- * (Tesseract is per-page anyway; streaming would only matter for >50 pages,
- * which we reject above).
+ * Streams rasterized pages one at a time (PR4 — review #23).
+ *
+ * Previously buffered all PNGs in memory before returning. For a 50-page
+ * scanned PDF at 200 DPI that meant 10–50 MB held simultaneously per
+ * worker, on top of Tesseract's own working memory. Now: the rendered
+ * files sit on disk, we readFile them lazily inside the loop, and each
+ * page buffer is GC-eligible as soon as the consumer moves on.
+ *
+ * The page count check still fires up-front (after pdftoppm completes)
+ * so the too_many_pages error is raised before any consumer work.
  *
  * pdftoppm flags:
  *   -png        emit PNG
  *   -r N        N dots per inch
  *   -l N        last page (we cap at MAX_PAGES + 1 to detect overflow)
  */
-export async function rasterizePdf(pdfBytes: Buffer): Promise<RasterizedPage[]> {
+export async function* rasterizePdfPages(
+  pdfBytes: Buffer,
+): AsyncGenerator<RasterizedPage, void, void> {
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), "gbp-rasterize-"));
   try {
     const pdfPath = path.join(tmpDir, "in.pdf");
@@ -57,10 +66,9 @@ export async function rasterizePdf(pdfBytes: Buffer): Promise<RasterizedPage[]> 
       outPrefix,
     ]);
 
-    // Collect outputs in deterministic page order.
     const files = (await readdir(tmpDir))
       .filter((f) => f.startsWith("page-") && f.endsWith(".png"))
-      .sort(); // page-001.png < page-002.png < …
+      .sort();
 
     if (files.length > MAX_PAGES) {
       throw new RasterizeError(
@@ -69,16 +77,14 @@ export async function rasterizePdf(pdfBytes: Buffer): Promise<RasterizedPage[]> 
       );
     }
 
-    const pages: RasterizedPage[] = [];
     for (const f of files) {
       const m = f.match(/page-(\d+)\.png$/);
       if (!m) continue;
-      pages.push({
+      yield {
         pageNumber: Number(m[1]),
         png: await readFile(path.join(tmpDir, f)),
-      });
+      };
     }
-    return pages;
   } finally {
     // Best-effort cleanup. A leaked tmpdir is annoying, not unsafe.
     await rm(tmpDir, { recursive: true, force: true }).catch(() => {});
