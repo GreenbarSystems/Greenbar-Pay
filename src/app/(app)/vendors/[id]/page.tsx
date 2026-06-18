@@ -53,57 +53,60 @@ export default async function VendorDetailPage({
       if (!permitted.includes(vendor.clientId)) return null;
     }
 
-    // PR6: pricing history is append-only — display only the active rows.
-    const pricing = await tx
-      .select()
-      .from(vendorPricingHistory)
-      .where(
-        and(
-          eq(vendorPricingHistory.vendorId, vendor.id),
-          isNull(vendorPricingHistory.supersededAt),
-        ),
-      )
-      .orderBy(desc(vendorPricingHistory.samples))
-      .limit(20);
-
-    const recentApprovedInvoices = await tx
-      .select({
-        id: extractedInvoices.id,
-        invoiceNumber: extractedInvoices.invoiceNumber,
-        invoiceDate: extractedInvoices.invoiceDate,
-        total: extractedInvoices.total,
-        reviewStatus: extractedInvoices.reviewStatus,
-        documentId: extractedInvoices.documentId,
-      })
-      .from(extractedInvoices)
-      .innerJoin(documents, eq(documents.id, extractedInvoices.documentId))
-      .where(
-        and(
-          eq(extractedInvoices.organizationId, organizationId),
-          inArray(extractedInvoices.reviewStatus, ["approved", "exported"]),
-          // Match by canonical name — Phase 8 will add a real vendor_id FK.
-          eq(extractedInvoices.vendorName, vendor.name),
-        ),
-      )
-      .orderBy(desc(extractedInvoices.invoiceDate))
-      .limit(10);
-
-    const profileEvents = await tx
-      .select({
-        id: auditEvents.id,
-        action: auditEvents.action,
-        createdAt: auditEvents.createdAt,
-        metadataJson: auditEvents.metadataJson,
-      })
-      .from(auditEvents)
-      .where(
-        and(
-          eq(auditEvents.entityType, "vendor"),
-          eq(auditEvents.entityId, vendor.id),
-        ),
-      )
-      .orderBy(desc(auditEvents.createdAt))
-      .limit(10);
+    // PR8 — review perf #4: fan out the three independent loads. Pricing,
+    // recent invoices, and profile events have no dependency between them
+    // once vendor is resolved.
+    const [pricing, recentApprovedInvoices, profileEvents] = await Promise.all([
+      // PR6: pricing history is append-only — display only the active rows.
+      tx
+        .select()
+        .from(vendorPricingHistory)
+        .where(
+          and(
+            eq(vendorPricingHistory.vendorId, vendor.id),
+            isNull(vendorPricingHistory.supersededAt),
+          ),
+        )
+        .orderBy(desc(vendorPricingHistory.samples))
+        .limit(20),
+      tx
+        .select({
+          id: extractedInvoices.id,
+          invoiceNumber: extractedInvoices.invoiceNumber,
+          invoiceDate: extractedInvoices.invoiceDate,
+          total: extractedInvoices.total,
+          reviewStatus: extractedInvoices.reviewStatus,
+          documentId: extractedInvoices.documentId,
+        })
+        .from(extractedInvoices)
+        .innerJoin(documents, eq(documents.id, extractedInvoices.documentId))
+        .where(
+          and(
+            eq(extractedInvoices.organizationId, organizationId),
+            inArray(extractedInvoices.reviewStatus, ["approved", "exported"]),
+            // Match by canonical name — Phase 8 will add a real vendor_id FK.
+            eq(extractedInvoices.vendorName, vendor.name),
+          ),
+        )
+        .orderBy(desc(extractedInvoices.invoiceDate))
+        .limit(10),
+      tx
+        .select({
+          id: auditEvents.id,
+          action: auditEvents.action,
+          createdAt: auditEvents.createdAt,
+          metadataJson: auditEvents.metadataJson,
+        })
+        .from(auditEvents)
+        .where(
+          and(
+            eq(auditEvents.entityType, "vendor"),
+            eq(auditEvents.entityId, vendor.id),
+          ),
+        )
+        .orderBy(desc(auditEvents.createdAt))
+        .limit(10),
+    ]);
 
     return { vendor, pricing, recentApprovedInvoices, profileEvents };
   });

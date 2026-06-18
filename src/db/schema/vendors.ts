@@ -77,6 +77,15 @@ export const vendors = pgTable(
       t.normalizedName,
     ),
     orgIdx: index("idx_vendors_org").on(t.organizationId),
+    // PR8 — review perf #5: composite index for the /vendors list sort
+    // (ORDER BY invoice_count DESC, last_invoice_date DESC) within an org.
+    // Created in sidecar/0013_pr8_perf.sql; declared here so the schema
+    // stays the source of truth.
+    orgCountLastInvIdx: index("idx_vendors_org_count_lastinv").on(
+      t.organizationId,
+      t.invoiceCount.desc(),
+      t.lastInvoiceDate.desc(),
+    ),
   }),
 );
 

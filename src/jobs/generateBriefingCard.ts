@@ -82,24 +82,47 @@ export async function handleGenerateBriefingCard(
       return null;
     }
 
-    const lines = await tx
-      .select()
-      .from(extractedInvoiceLines)
-      .where(eq(extractedInvoiceLines.extractedInvoiceId, extractedInvoiceId))
-      .orderBy(extractedInvoiceLines.lineNumber);
-
-    const [latestValidation] = await tx
-      .select()
-      .from(validationResults)
-      .where(
-        and(
-          eq(validationResults.entityType, "extracted_invoice"),
-          eq(validationResults.entityId, extractedInvoiceId),
-          isNull(validationResults.supersededAt),
-        ),
-      )
-      .orderBy(desc(validationResults.createdAt))
-      .limit(1);
+    // PR8 — review perf #3: fan out the four independent loads in parallel.
+    // They share the tx's snapshot so results are consistent. Same pattern
+    // PR4 used in the dashboard. Inside a single tx the queries land on
+    // one connection (no wire-level parallelism with node-postgres), but
+    // hoisting them out of the await chain saves the per-query event-loop
+    // schedule and makes the dependency story explicit.
+    const [lines, latestValidation, latestExtraction, latestMatch] =
+      await Promise.all([
+        tx
+          .select()
+          .from(extractedInvoiceLines)
+          .where(eq(extractedInvoiceLines.extractedInvoiceId, extractedInvoiceId))
+          .orderBy(extractedInvoiceLines.lineNumber),
+        tx
+          .select()
+          .from(validationResults)
+          .where(
+            and(
+              eq(validationResults.entityType, "extracted_invoice"),
+              eq(validationResults.entityId, extractedInvoiceId),
+              isNull(validationResults.supersededAt),
+            ),
+          )
+          .orderBy(desc(validationResults.createdAt))
+          .limit(1)
+          .then((r) => r[0]),
+        tx
+          .select({ textLength: documentExtractions.textLength })
+          .from(documentExtractions)
+          .where(eq(documentExtractions.documentId, invoice.documentId))
+          .orderBy(desc(documentExtractions.createdAt))
+          .limit(1)
+          .then((r) => r[0]),
+        tx
+          .select({ vendorId: vendorMatches.vendorId })
+          .from(vendorMatches)
+          .where(eq(vendorMatches.extractedInvoiceId, extractedInvoiceId))
+          .orderBy(desc(vendorMatches.createdAt))
+          .limit(1)
+          .then((r) => r[0]),
+      ]);
 
     const findingsRaw =
       latestValidation && Array.isArray(latestValidation.errorsJson)
@@ -116,24 +139,10 @@ export async function handleGenerateBriefingCard(
       (f) => f.severity === "warning",
     ).length;
 
-    const [latestExtraction] = await tx
-      .select({ textLength: documentExtractions.textLength })
-      .from(documentExtractions)
-      .where(eq(documentExtractions.documentId, invoice.documentId))
-      .orderBy(desc(documentExtractions.createdAt))
-      .limit(1);
     const textQualityLow =
       latestExtraction !== undefined &&
       latestExtraction.textLength !== null &&
       latestExtraction.textLength < LOW_TEXT_LENGTH;
-
-    // Vendor profile via the latest match row.
-    const [latestMatch] = await tx
-      .select({ vendorId: vendorMatches.vendorId })
-      .from(vendorMatches)
-      .where(eq(vendorMatches.extractedInvoiceId, extractedInvoiceId))
-      .orderBy(desc(vendorMatches.createdAt))
-      .limit(1);
 
     let vendorProfile: typeof vendors.$inferSelect | null = null;
     let priorInvoice: typeof extractedInvoices.$inferSelect | null = null;
