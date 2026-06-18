@@ -48,6 +48,7 @@ export const JOB = {
   extractInvoiceData: "extract-invoice-data",
   validateExtractedInvoice: "validate-extracted-invoice",
   exportInvoices: "export-invoices",
+  recomputeVendorProfile: "recompute-vendor-profile",
 } as const;
 
 export type JobPayloads = {
@@ -58,4 +59,5 @@ export type JobPayloads = {
     organizationId: string;
   };
   [JOB.exportInvoices]: { exportId: string; organizationId: string };
+  [JOB.recomputeVendorProfile]: { vendorId: string; organizationId: string };
 };

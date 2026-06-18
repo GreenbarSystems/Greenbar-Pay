@@ -39,6 +39,8 @@ import {
   pickFields,
   INVOICE_HEADER_FIELDS,
 } from "@/lib/route-helpers";
+import { bootstrapVendorOnApprove } from "@/lib/vendors/bootstrap";
+import { getQueue, JOB } from "@/lib/queue";
 
 export async function POST(
   req: Request,
@@ -63,7 +65,7 @@ export async function POST(
     `/api/ap/review/${params.id}/approve`,
     {},
     async () => {
-      return withOrg(organizationId, async (tx) => {
+      const txResult = await withOrg(organizationId, async (tx) => {
         // Block approval until an ACTIVE validation row EXISTS (closes the
         // race window between extract-invoice-data and validate-extracted-
         // invoice) AND, if it exists, has no blocking findings.
@@ -202,6 +204,17 @@ export async function POST(
             ),
           );
 
+        // Phase 7 — D1: auto-bootstrap the vendor master + promote any
+        // fuzzy-matched alias. Done inside the same tx so the audit row
+        // can record the resolved vendor_id.
+        const bootstrap = await bootstrapVendorOnApprove(tx, {
+          organizationId,
+          clientId: before.clientId,
+          extractedInvoiceId: params.id,
+          extractedVendorName: before.vendorName,
+          extractedPaymentTerms: before.paymentTerms,
+        });
+
         await tx.insert(auditEvents).values({
           organizationId,
           actorType: "user",
@@ -222,15 +235,40 @@ export async function POST(
             // separation-of-duties guard ran and passed.
             sodChecked: true,
             sodPassed: true,
+            vendorBootstrap: bootstrap,
             uploaderId: parentDoc?.createdBy ?? null,
           },
         });
 
         return {
           status: 200,
-          body: { extractedInvoiceId: params.id, reviewStatus: "approved" },
+          body: {
+            extractedInvoiceId: params.id,
+            reviewStatus: "approved",
+            vendorBootstrap: bootstrap,
+          },
+          // Phase 7 — D1: vendor profile recompute is enqueued AFTER
+          // commit, not inside the tx. Stashing the vendorId here.
+          enqueueRecompute: bootstrap?.vendorId ?? null,
         };
       });
+
+      // Phase 7 — D1: kick the profile recompute job once the approve
+      // committed. The job is idempotent on vendorId — a duplicate
+      // delivery just re-aggregates and writes the same numbers.
+      if (
+        "enqueueRecompute" in txResult &&
+        typeof txResult.enqueueRecompute === "string"
+      ) {
+        const boss = await getQueue();
+        await boss.send(
+          JOB.recomputeVendorProfile,
+          { vendorId: txResult.enqueueRecompute, organizationId },
+          { singletonKey: `recompute-vendor-profile:${txResult.enqueueRecompute}` },
+        );
+      }
+
+      return { status: txResult.status, body: txResult.body };
     },
   );
 }

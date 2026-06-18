@@ -8,6 +8,7 @@ import { handleProcessDocument } from "./processDocument";
 import { handleExtractInvoiceData } from "./extractInvoiceData";
 import { handleValidateExtractedInvoice } from "./validateExtractedInvoice";
 import { handleExportInvoices } from "./exportInvoices";
+import { handleRecomputeVendorProfile } from "./recomputeVendorProfile";
 
 type Handler<N extends keyof JobPayloads> = (
   job: PgBoss.Job<JobPayloads[N]>,
@@ -45,5 +46,11 @@ export const HANDLERS: Array<{
     name: JOB.exportInvoices,
     options: { teamSize: 2, teamConcurrency: 2 },
     handler: handleExportInvoices as Handler<keyof JobPayloads>,
+  },
+  {
+    // Phase 7 — D1. Idempotent on vendorId; advisory-locked per-vendor.
+    name: JOB.recomputeVendorProfile,
+    options: { teamSize: 4, teamConcurrency: 2 },
+    handler: handleRecomputeVendorProfile as Handler<keyof JobPayloads>,
   },
 ];

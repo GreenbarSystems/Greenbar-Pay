@@ -119,12 +119,15 @@ export async function runValidationInTx(
       .map((r) => duplicateKey(r.vendorName!, r.invoiceNumber!)),
   );
 
-  // 3. Vendor match.
+  // 3. Vendor match. Phase 7 — include aliases so previously-promoted
+  // variant spellings resolve as exact instead of falling through to
+  // Jaccard.
   const candidates = await tx
     .select({
       id: vendors.id,
       name: vendors.name,
       normalizedName: vendors.normalizedName,
+      aliases: vendors.aliases,
     })
     .from(vendors)
     .where(eq(vendors.organizationId, args.organizationId));
@@ -203,6 +206,7 @@ export async function runValidationInTx(
     vendorId: vm.vendorId,
     matchConfidence: vm.confidence,
     matchScore: String(vm.score),
+    matchMethod: vm.method,
     candidatesJson: vm.candidates,
   });
 
