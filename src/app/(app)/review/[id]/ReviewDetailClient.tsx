@@ -86,6 +86,20 @@ interface Props {
     duplicateSubmissionCount: number;
     lastInvoiceDate: string | null;
   } | null;
+  /** Phase 8 — D2: the active Briefing Card snapshot, if generation succeeded. */
+  briefingCard: {
+    glCode: string | null;
+    glRationale: string;
+    anomalyFlags: Array<{
+      code: string;
+      severity: "info" | "warning" | "critical";
+      message: string;
+    }>;
+    deltaSummary: string;
+    riskScore: number;
+    riskJustification: string;
+    generatedAt: string;
+  } | null;
   audits: Audit[];
 }
 
@@ -207,8 +221,11 @@ export default function ReviewDetailClient(props: Props) {
   }
 
   return (
-    <div className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_420px]">
-      {/* ── File preview ────────────────────────────────────────────── */}
+    // Phase 8 — spec §7.2: Source 40% / Extracted 30% / Briefing+Coaching 30%.
+    // minmax(0, …) prevents long line-item descriptions from blowing out
+    // the column widths.
+    <div className="grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,40fr)_minmax(0,30fr)_minmax(0,30fr)]">
+      {/* ── Column 1: Source Document ────────────────────────────────── */}
       <div className="rounded-md border border-gray-200 bg-white p-2">
         <div className="mb-2 flex items-center justify-between px-2">
           <h2 className="text-sm font-medium text-gray-700">Original</h2>
@@ -236,7 +253,7 @@ export default function ReviewDetailClient(props: Props) {
         )}
       </div>
 
-      {/* ── Extraction editor + actions ─────────────────────────────── */}
+      {/* ── Column 2: Extracted fields + actions + lines + findings ── */}
       <div className="space-y-4">
         <div className="rounded-md border border-gray-200 bg-white p-4">
           <div className="mb-3 flex items-center justify-between">
@@ -352,6 +369,19 @@ export default function ReviewDetailClient(props: Props) {
             </table>
           )}
         </div>
+
+      </div>
+
+      {/* ── Column 3: Briefing Card + Vendor snapshot + Audit ─────── */}
+      <div className="space-y-4">
+        {/* Phase 8 — D2: the AI's plain-English review brief. */}
+        {props.briefingCard ? (
+          <BriefingCardPanel card={props.briefingCard} />
+        ) : (
+          <div className="rounded-md border border-dashed border-gray-300 bg-white p-4 text-xs text-gray-500">
+            Briefing pending — generation runs after validation completes.
+          </div>
+        )}
 
         {/* ── Vendor snapshot (Phase 7 — D1) ──────────────────────── */}
         {props.vendorProfile ? (
@@ -470,6 +500,107 @@ export default function ReviewDetailClient(props: Props) {
           </ul>
         </details>
       </div>
+    </div>
+  );
+}
+
+/**
+ * Briefing Card panel — Phase 8 (D2 from updated MVP spec).
+ *
+ * Renders the LLM's structured review brief: GL coding rationale,
+ * anomaly flags with severity pills, delta from the last invoice,
+ * and a color-banded risk score with one-sentence justification.
+ *
+ * Risk band per spec §7.1: green 0–30, amber 31–60, red 61–100.
+ */
+function BriefingCardPanel({
+  card,
+}: {
+  card: NonNullable<Props["briefingCard"]>;
+}) {
+  const band =
+    card.riskScore <= 30 ? "green" : card.riskScore <= 60 ? "amber" : "red";
+  const riskClasses = {
+    green: "bg-green-50 text-green-900 border-green-200",
+    amber: "bg-amber-50 text-amber-900 border-amber-200",
+    red: "bg-red-50 text-red-900 border-red-200",
+  }[band];
+
+  return (
+    <div className="rounded-md border border-gray-200 bg-white p-4">
+      <div className="mb-3 flex items-center justify-between">
+        <h2 className="text-sm font-medium text-gray-700">Briefing card</h2>
+        <span className="text-xs text-gray-500">
+          {card.generatedAt.slice(0, 16).replace("T", " ")}
+        </span>
+      </div>
+
+      {/* Risk score with color band */}
+      <div className={`mb-4 rounded-md border ${riskClasses} p-3`}>
+        <div className="flex items-baseline justify-between">
+          <span className="text-xs font-medium uppercase tracking-wide">
+            Risk score
+          </span>
+          <span className="text-2xl font-semibold tabular-nums">
+            {card.riskScore}
+            <span className="text-sm text-gray-500"> / 100</span>
+          </span>
+        </div>
+        <p className="mt-1 text-xs leading-snug">{card.riskJustification}</p>
+      </div>
+
+      {/* GL coding suggestion */}
+      <div className="mb-3">
+        <p className="text-xs uppercase tracking-wide text-gray-500">GL coding</p>
+        <p className="mt-1 text-sm font-medium text-gray-900">
+          {card.glCode ?? (
+            <em className="font-normal text-gray-400">No suggestion</em>
+          )}
+        </p>
+        <p className="mt-1 text-xs leading-snug text-gray-700">
+          {card.glRationale}
+        </p>
+      </div>
+
+      {/* Anomaly flags */}
+      <div className="mb-3">
+        <p className="mb-1 text-xs uppercase tracking-wide text-gray-500">
+          Anomaly flags
+        </p>
+        {card.anomalyFlags.length === 0 ? (
+          <p className="text-xs text-gray-500">None.</p>
+        ) : (
+          <ul className="space-y-1">
+            {card.anomalyFlags.map((f, i) => {
+              const severityClass = {
+                info: "bg-gray-100 text-gray-800",
+                warning: "bg-amber-100 text-amber-800",
+                critical: "bg-red-100 text-red-800",
+              }[f.severity];
+              return (
+                <li key={i} className="text-xs leading-snug">
+                  <span
+                    className={`mr-1 inline-block rounded px-1.5 py-0.5 text-[10px] font-medium uppercase ${severityClass}`}
+                  >
+                    {f.severity}
+                  </span>
+                  {f.message}
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </div>
+
+      {/* Delta from last invoice */}
+      {card.deltaSummary && (
+        <div>
+          <p className="mb-1 text-xs uppercase tracking-wide text-gray-500">
+            Delta from last invoice
+          </p>
+          <p className="text-xs leading-snug text-gray-700">{card.deltaSummary}</p>
+        </div>
+      )}
     </div>
   );
 }

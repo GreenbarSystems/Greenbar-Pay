@@ -1,23 +1,31 @@
 /**
  * Anthropic provider implementation. Uses native tool-use so the model
- * is constrained at decode time to emit JSON matching INVOICE_TOOL_JSON_SCHEMA.
+ * is constrained at decode time to emit JSON matching the supplied tool
+ * schema.
  *
- * The function returns the *parsed and Zod-validated* extraction. Schema
- * failure throws InvoiceSchemaError so the gateway can record it on the
- * llm_runs row and decide whether to retry-with-correction.
+ * Phase 8 — generalized over the output schema so the same dispatch
+ * primitive can serve invoice extraction (Call 1), briefing card
+ * generation (Call 2), and coaching prompt generation (Call 3). The
+ * caller passes a Zod schema; we decode the tool_use input through it
+ * and return the parsed result.
+ *
+ * Schema failure throws LlmSchemaError so the gateway can record it on
+ * llm_runs and decide whether to retry with a correction prompt.
  */
+import type { ZodType } from "zod";
 import {
   getAnthropicClient,
   type ToolUseBlock,
 } from "./internal/anthropicClient";
 import type { BuiltPrompt } from "./prompt";
-import {
-  InvoiceExtractionSchema,
-  type InvoiceExtractionResult,
-} from "./schema";
 import { scrubError } from "./scrub";
 
-export class InvoiceSchemaError extends Error {
+/**
+ * Schema failure on a tool-use response. Renamed from `InvoiceSchemaError`
+ * in Phase 8 since multiple call types share it; the old name is
+ * re-exported for back-compat.
+ */
+export class LlmSchemaError extends Error {
   readonly code = "schema_failed";
   readonly issues: unknown;
   constructor(message: string, issues: unknown) {
@@ -25,32 +33,35 @@ export class InvoiceSchemaError extends Error {
     this.issues = issues;
   }
 }
+/** @deprecated Phase 8 renamed to LlmSchemaError; kept for back-compat. */
+export const InvoiceSchemaError = LlmSchemaError;
 
 export class ProviderError extends Error {
   readonly code = "provider_error";
   readonly cause: unknown;
   constructor(cause: unknown) {
-    // SDK errors (esp. Anthropic 4xx) frequently echo fragments of the
-    // request body in `.message`. Run the cause through scrubError before
-    // building this message so the resulting `.message` never carries
-    // raw payload data — it's the value stored on `llm_runs.error_message`
-    // and surfaced anywhere this Error.message is read.
     const scrubbed = scrubError(cause);
     super(`anthropic dispatch failed: ${scrubbed.message}`);
-    // Keep the (already-scrubbed) cause so consumers can introspect.
     this.cause = scrubbed;
   }
 }
 
-interface DispatchInput {
+interface DispatchInput<T> {
   apiModelId: string;
   prompt: BuiltPrompt;
+  /**
+   * Zod schema used to decode the tool_use input. Phase 8 made this
+   * a required parameter so the same dispatch function serves Call 1
+   * (invoice), Call 2 (briefing), Call 3 (coaching). Each caller
+   * supplies its own schema and gets back a typed result.
+   */
+  outputSchema: ZodType<T>;
   /** When set, prepended as a correction nudge to a retry attempt. */
   correctionContext?: string;
 }
 
-export interface DispatchOutput {
-  result: InvoiceExtractionResult;
+export interface DispatchOutput<T> {
+  result: T;
   rawToolInput: unknown;
 }
 
@@ -58,9 +69,9 @@ export interface DispatchOutput {
  * Single dispatch. The gateway in index.ts wraps this in compliance,
  * circuit, quota, and retry logic.
  */
-export async function dispatchAnthropic(
-  input: DispatchInput,
-): Promise<DispatchOutput> {
+export async function dispatchAnthropic<T>(
+  input: DispatchInput<T>,
+): Promise<DispatchOutput<T>> {
   const client = getAnthropicClient();
   const systemPrompt = input.correctionContext
     ? `${input.prompt.systemPrompt}\n\nCORRECTION NOTE: ${input.correctionContext}`
@@ -81,20 +92,19 @@ export async function dispatchAnthropic(
     throw new ProviderError(err);
   }
 
-  // The tool-choice forcing means there must be exactly one tool_use block.
   const toolUse = response.content.find(
     (b): b is ToolUseBlock => b.type === "tool_use",
   );
   if (!toolUse) {
-    throw new InvoiceSchemaError(
+    throw new LlmSchemaError(
       "anthropic returned no tool_use block",
       { responseType: response.stop_reason },
     );
   }
 
-  const parsed = InvoiceExtractionSchema.safeParse(toolUse.input);
+  const parsed = input.outputSchema.safeParse(toolUse.input);
   if (!parsed.success) {
-    throw new InvoiceSchemaError(
+    throw new LlmSchemaError(
       "tool_use input failed Zod validation",
       parsed.error.issues,
     );

@@ -9,6 +9,7 @@ import { handleExtractInvoiceData } from "./extractInvoiceData";
 import { handleValidateExtractedInvoice } from "./validateExtractedInvoice";
 import { handleExportInvoices } from "./exportInvoices";
 import { handleRecomputeVendorProfile } from "./recomputeVendorProfile";
+import { handleGenerateBriefingCard } from "./generateBriefingCard";
 
 type Handler<N extends keyof JobPayloads> = (
   job: PgBoss.Job<JobPayloads[N]>,
@@ -52,5 +53,13 @@ export const HANDLERS: Array<{
     name: JOB.recomputeVendorProfile,
     options: { teamSize: 4, teamConcurrency: 2 },
     handler: handleRecomputeVendorProfile as Handler<keyof JobPayloads>,
+  },
+  {
+    // Phase 8 — D2. Idempotent on extractedInvoiceId; advisory-locked.
+    // Low concurrency to keep LLM dispatch traffic visible to the
+    // circuit breaker (§2.7), matching extract-invoice-data.
+    name: JOB.generateBriefingCard,
+    options: { teamSize: 4, teamConcurrency: 1 },
+    handler: handleGenerateBriefingCard as Handler<keyof JobPayloads>,
   },
 ];

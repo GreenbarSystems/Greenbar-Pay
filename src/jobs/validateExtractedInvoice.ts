@@ -26,7 +26,7 @@ import {
 import { runValidationInTx } from "@/lib/validation/run";
 import { blockingPresent } from "@/lib/validation";
 import type { JobPayloads } from "@/lib/queue";
-import { JOB } from "@/lib/queue";
+import { JOB, getQueue } from "@/lib/queue";
 
 export async function handleValidateExtractedInvoice(
   job: PgBoss.Job<JobPayloads[typeof JOB.validateExtractedInvoice]>,
@@ -95,6 +95,17 @@ export async function handleValidateExtractedInvoice(
       },
     });
   });
+
+  // Phase 8 — D2: refresh the Briefing Card after every validation run.
+  // The job is idempotent on extractedInvoiceId and advisory-locked,
+  // so a duplicate delivery (e.g. PATCH re-validate followed by a job
+  // retry) collapses to one fresh briefing.
+  const boss = await getQueue();
+  await boss.send(
+    JOB.generateBriefingCard,
+    { extractedInvoiceId, organizationId },
+    { singletonKey: `generate-briefing-card:${extractedInvoiceId}` },
+  );
 }
 
 function isActiveForValidation(status: string): boolean {

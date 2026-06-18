@@ -57,10 +57,16 @@ export interface BuiltPrompt {
   inputHash: string;
   /** Char count is a reasonable proxy for tokens for §2.7's cap. */
   estimatedTokens: number;
+  /**
+   * Phase 8 loosened `input_schema` to any object so the same BuiltPrompt
+   * type can carry the invoice schema (Call 1), briefing schema (Call 2),
+   * or coaching schema (Call 3). The schema is opaque to the gateway —
+   * it's handed to Anthropic and decoded via Zod by the dispatcher.
+   */
   tool: {
     name: string;
     description: string;
-    input_schema: typeof INVOICE_TOOL_JSON_SCHEMA;
+    input_schema: Readonly<Record<string, unknown>>;
   };
 }
 
