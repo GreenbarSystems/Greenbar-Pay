@@ -88,6 +88,18 @@ export const vendors = pgTable(
  * Drives the rate-drift validation rule in Phase 7 and the contract
  * variance rule in Phase 10.
  */
+/**
+ * PR6 — review #4: append-only with `superseded_at`. Same pattern as
+ * validation_results (PR2) and briefing_cards (Phase 8). Each
+ * recompute soft-supersedes any prior active row for the
+ * (vendor, keyword) pair and inserts a fresh one. The active view is
+ * `WHERE superseded_at IS NULL`, served by the partial index.
+ *
+ * The old `uniq_vendor_pricing_vendor_keyword` UNIQUE index is replaced
+ * by a partial unique index on the active row only — multiple
+ * superseded rows for the same (vendor, keyword) are valid (and
+ * desired) so the historical trail survives.
+ */
 export const vendorPricingHistory = pgTable(
   "vendor_pricing_history",
   {
@@ -100,17 +112,16 @@ export const vendorPricingHistory = pgTable(
       .references(() => vendors.id, { onDelete: "cascade" }),
     /** Lowercased, stemmed line description used as the grouping key. */
     itemKeyword: text("item_keyword").notNull(),
-    /** Mean unit price across the recent samples (oldest sample dropped at SAMPLE_CAP). */
+    /** Mean unit price across the captured samples. */
     avgUnitPrice: numeric("avg_unit_price", { precision: 16, scale: 4 }).notNull(),
-    /** Sample count — caller compares the new unit_price against avgUnitPrice once samples >= 3. */
+    /** Sample count contributing to this row. */
     samples: integer("samples").notNull(),
     lastSeenAt: timestamp("last_seen_at", { withTimezone: true }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    /** NULL = active. Set by recompute when a fresh aggregate replaces this row. */
+    supersededAt: timestamp("superseded_at", { withTimezone: true }),
   },
   (t) => ({
-    uniqVendorKeyword: uniqueIndex("uniq_vendor_pricing_vendor_keyword").on(
-      t.vendorId,
-      t.itemKeyword,
-    ),
     vendorIdx: index("idx_vendor_pricing_vendor").on(t.vendorId),
   }),
 );

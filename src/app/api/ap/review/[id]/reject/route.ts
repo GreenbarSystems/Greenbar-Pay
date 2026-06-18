@@ -102,6 +102,20 @@ export async function POST(
           .where(eq(documents.id, before.documentId))
           .limit(1);
         if (parentDoc?.createdBy && parentDoc.createdBy === userId) {
+          // PR6 — review #2 / #3 SoD denial audit. Same shape as approve;
+          // makes the control observable to an auditor.
+          await tx.insert(auditEvents).values({
+            organizationId,
+            actorType: "user",
+            actorId: userId,
+            action: "invoice.sod_denied",
+            entityType: "extracted_invoice",
+            entityId: params.id,
+            metadataJson: {
+              attemptedAction: "reject",
+              uploaderId: parentDoc.createdBy,
+            },
+          });
           return {
             status: 403,
             body: {

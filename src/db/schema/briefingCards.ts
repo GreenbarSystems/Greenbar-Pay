@@ -50,6 +50,13 @@ export const briefingCards = pgTable(
     riskScore: integer("risk_score").notNull(),
     /** LLM-written one-sentence justification of the score. */
     riskJustification: text("risk_justification").notNull(),
+    /**
+     * PR6 — version of the risk-score weight table that produced
+     * this score. Bumped via RISK_SCORE_VERSION in
+     * src/lib/briefing/risk-score.ts. Makes weight changes traceable
+     * across the lifetime of every persisted briefing.
+     */
+    riskScoreVersion: text("risk_score_version").notNull().default("pr6-baseline"),
     /** Vendor profile snapshot at generation time — embedded for the evidence packet. */
     vendorContextJson: jsonb("vendor_context_json"),
     /** Risk factors that contributed (deterministic, computed). */

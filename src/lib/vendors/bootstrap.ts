@@ -20,7 +20,7 @@
  */
 import { and, eq, sql } from "drizzle-orm";
 import type { Tx } from "@/db/client";
-import { vendors, vendorMatches } from "@/db/schema";
+import { vendors, vendorMatches, auditEvents } from "@/db/schema";
 import { desc } from "drizzle-orm";
 import { normalizeVendor } from "@/lib/validation";
 
@@ -30,6 +30,14 @@ export interface BootstrapInput {
   extractedInvoiceId: string;
   extractedVendorName: string | null;
   extractedPaymentTerms: string | null;
+  /**
+   * The approving user — recorded as `actor_id` on the vendor.*
+   * audit events emitted by this function. PR6: previously the
+   * caller embedded the bootstrap outcome in invoice.approved
+   * metadata, which made vendor mutations invisible to audit
+   * queries scoped by entity_type='vendor'.
+   */
+  actorUserId: string;
 }
 
 export interface BootstrapResult {
@@ -94,6 +102,23 @@ export async function bootstrapVendorOnApprove(
         )`,
       })
       .where(eq(vendors.id, latestMatch.vendorId));
+
+    // PR6 — review #2: vendor master mutations get first-class audit
+    // events so an audit query by entity_type='vendor' surfaces them.
+    await tx.insert(auditEvents).values({
+      organizationId: input.organizationId,
+      actorType: "user",
+      actorId: input.actorUserId,
+      action: "vendor.aliased",
+      entityType: "vendor",
+      entityId: latestMatch.vendorId,
+      metadataJson: {
+        extractedInvoiceId: input.extractedInvoiceId,
+        promotedAlias: normalized,
+        viaMatchMethod: "jaccard",
+      },
+    });
+
     return { vendorId: latestMatch.vendorId, action: "aliased" };
   }
 
@@ -116,6 +141,21 @@ export async function bootstrapVendorOnApprove(
     .returning({ id: vendors.id });
 
   if (inserted) {
+    // PR6 — review #2: vendor creation gets a first-class audit event.
+    await tx.insert(auditEvents).values({
+      organizationId: input.organizationId,
+      actorType: "user",
+      actorId: input.actorUserId,
+      action: "vendor.created",
+      entityType: "vendor",
+      entityId: inserted.id,
+      metadataJson: {
+        extractedInvoiceId: input.extractedInvoiceId,
+        name: input.extractedVendorName,
+        normalizedName: normalized,
+        defaultPaymentTerms: input.extractedPaymentTerms,
+      },
+    });
     return { vendorId: inserted.id, action: "created" };
   }
 

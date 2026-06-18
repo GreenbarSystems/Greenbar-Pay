@@ -12,16 +12,35 @@ import Link from "next/link";
 import { auth } from "@/lib/auth";
 import { withOrg } from "@/db/client";
 import { vendors } from "@/db/schema";
-import { desc, eq } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, or, sql } from "drizzle-orm";
+import { loadPermittedClientIds } from "@/lib/rbac/client-scope";
 
 const PROFILE_READY_THRESHOLD = 3;
 
 export default async function VendorsListPage() {
   const session = await auth();
   if (!session?.user) return null;
-  const { organizationId } = session.user;
+  const { organizationId, role, id: userId } = session.user;
 
   const rows = await withOrg(organizationId, async (tx) => {
+    // PR6 — review #5: per-client read scope. clerk/viewer users with
+    // explicit per-client grants must NOT see other clients' vendor
+    // financial profiles. reviewer/admin/owner get org-wide.
+    const permitted = await loadPermittedClientIds(tx, { userId, orgRole: role });
+    const clientFilter =
+      permitted === null
+        ? undefined
+        : permitted.length === 0
+          ? // No grants at all → only unaffiliated vendors.
+            isNull(vendors.clientId)
+          : or(
+              isNull(vendors.clientId),
+              inArray(vendors.clientId, permitted),
+            );
+    const where = clientFilter
+      ? and(eq(vendors.organizationId, organizationId), clientFilter)
+      : eq(vendors.organizationId, organizationId);
+
     return tx
       .select({
         id: vendors.id,
@@ -36,7 +55,7 @@ export default async function VendorsListPage() {
         duplicateSubmissionCount: vendors.duplicateSubmissionCount,
       })
       .from(vendors)
-      .where(eq(vendors.organizationId, organizationId))
+      .where(where)
       .orderBy(desc(vendors.invoiceCount), desc(vendors.lastInvoiceDate))
       .limit(200);
   });
