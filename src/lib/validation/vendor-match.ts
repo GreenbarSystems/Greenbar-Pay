@@ -43,11 +43,22 @@ export function matchVendor(
   }
 
   // Jaccard overlap on tokens. Cheap, no deps.
+  //
+  // PR4 — review #27: the original `[...targetTokens].filter(...).length`
+  // allocated a fresh array AND a union Set on every candidate iteration.
+  // For a CPA firm with 10,000 vendors that's 20,000 allocations and a
+  // throwaway Set per call. The shape below uses an in-place counter
+  // and computes |union| = |a| + |b| - |intersection| arithmetically
+  // — zero allocations inside the inner loop.
+  const targetSize = targetTokens.size;
   const scored = candidates
     .map((c) => {
       const candTokens = new Set(c.normalizedName.split(" ").filter(Boolean));
-      const intersection = [...targetTokens].filter((t) => candTokens.has(t)).length;
-      const union = new Set([...targetTokens, ...candTokens]).size;
+      let intersection = 0;
+      for (const t of targetTokens) {
+        if (candTokens.has(t)) intersection += 1;
+      }
+      const union = targetSize + candTokens.size - intersection;
       const score = union === 0 ? 0 : intersection / union;
       return { id: c.id, name: c.name, score };
     })

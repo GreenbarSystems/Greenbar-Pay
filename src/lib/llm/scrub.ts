@@ -42,13 +42,49 @@ const SENSITIVE_KEY_SET = new Set(SENSITIVE_KEYS.map((k) => k.toLowerCase()));
 
 const REDACTED = "[REDACTED]";
 
-/** Recursively redact known-sensitive keys. Mutating walk on a copy. */
+/**
+ * PR4 — review #26: pre-compile the per-key regex pairs ONCE at module
+ * load. Previously scrubError() built `2 * SENSITIVE_KEYS.length`
+ * RegExp objects per call (40 today). The compiled regexes are kept
+ * `lastIndex`-stateless thanks to the `g` flag + .replace usage.
+ */
+const SCRUB_PATTERNS: ReadonlyArray<{ quoted: RegExp; bare: RegExp }> =
+  SENSITIVE_KEYS.map((k) => ({
+    // "key":"…"
+    quoted: new RegExp(`("${k}"\\s*:\\s*)"[^"]*"`, "gi"),
+    // key=…
+    bare: new RegExp(`(${k}\\s*=\\s*)\\S+`, "gi"),
+  }));
+
+/**
+ * Recursively redact known-sensitive keys. Returns the input as-is when
+ * possible (PR4 — review #27 short-circuit).
+ */
 export function scrub<T>(value: T, depth = 0): T {
   if (depth > 8 || value === null || value === undefined) return value;
   if (Array.isArray(value)) {
+    // Short-circuit: if every element is a primitive AND no element is
+    // itself an object/array, return as-is. The common audit-log case
+    // doesn't allocate.
+    if (value.every((v) => typeof v !== "object" || v === null)) return value;
     return value.map((v) => scrub(v, depth + 1)) as unknown as T;
   }
   if (typeof value === "object") {
+    // Short-circuit: shallow object with no sensitive keys and no nested
+    // objects/arrays → return as-is.
+    let needsClone = false;
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+      if (SENSITIVE_KEY_SET.has(k.toLowerCase())) {
+        needsClone = true;
+        break;
+      }
+      if (v !== null && typeof v === "object") {
+        needsClone = true;
+        break;
+      }
+    }
+    if (!needsClone) return value;
+
     const out: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
       if (SENSITIVE_KEY_SET.has(k.toLowerCase())) {
@@ -69,19 +105,11 @@ export function scrub<T>(value: T, depth = 0): T {
 export function scrubError(err: unknown): Error {
   const base =
     err instanceof Error ? err : new Error(typeof err === "string" ? err : "unknown");
-  // Scrub the message: look for any sensitive key=value or "key":"value".
   let message = base.message;
-  for (const k of SENSITIVE_KEYS) {
-    // "key":"…"
-    message = message.replace(
-      new RegExp(`("${k}"\\s*:\\s*)"[^"]*"`, "gi"),
-      `$1"${REDACTED}"`,
-    );
-    // key=…
-    message = message.replace(
-      new RegExp(`(${k}\\s*=\\s*)\\S+`, "gi"),
-      `$1${REDACTED}`,
-    );
+  // Iterate the pre-compiled regexes (PR4 — review #26).
+  for (const p of SCRUB_PATTERNS) {
+    message = message.replace(p.quoted, (_, prefix) => `${prefix}"${REDACTED}"`);
+    message = message.replace(p.bare, (_, prefix) => `${prefix}${REDACTED}`);
   }
   const out = new Error(message);
   out.stack = base.stack;
