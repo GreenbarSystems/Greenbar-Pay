@@ -264,6 +264,15 @@ export async function handleRecomputeVendorProfile(
       .where(eq(vendors.id, vendorId));
 
     // 5. Pricing history. Aggregate line items by normalized keyword.
+    //
+    // PR9 — hotfix from cross-reviewer adversarial pass: the previous code
+    // referenced an undeclared `invoiceIds` identifier here. The correct
+    // scope is the approved/exported invoices already loaded above
+    // (invoiceRows); we want pricing history aggregated from the same
+    // rows feeding the header stats — never from rejected or superseded
+    // invoices. allVendorInvoiceIds (which includes non-approved rows)
+    // is reserved for the duplicate-submission tally further down.
+    const approvedInvoiceIds = invoiceRows.map((r) => r.id);
     const lineRows = await tx
       .select({
         description: extractedInvoiceLines.description,
@@ -278,7 +287,7 @@ export async function handleRecomputeVendorProfile(
       .where(
         and(
           eq(extractedInvoiceLines.organizationId, organizationId),
-          inArray(extractedInvoiceLines.extractedInvoiceId, invoiceIds),
+          inArray(extractedInvoiceLines.extractedInvoiceId, approvedInvoiceIds),
         ),
       );
 
