@@ -13,7 +13,7 @@ import { z } from "zod";
 import { auth } from "@/lib/auth";
 import { withOrg } from "@/db/client";
 import { extractedInvoices, auditEvents, documents } from "@/db/schema";
-import { requirePermission } from "@/lib/rbac";
+import { can, loadEffectiveRole } from "@/lib/rbac";
 import { withIdempotency } from "@/lib/review/idempotencyWrap";
 import {
   requireUuid,
@@ -36,11 +36,8 @@ export async function POST(
   if (!session?.user) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   const { organizationId, role, id: userId } = session.user;
 
-  try {
-    requirePermission(role, "invoice.reject");
-  } catch (err) {
-    return NextResponse.json({ error: (err as Error).message }, { status: 403 });
-  }
+  // PR3 — review #16: org-role fast path + per-client elevation inside tx.
+  const hasOrgPermission = can(role, "invoice.reject");
 
   let body;
   try {
@@ -75,6 +72,24 @@ export async function POST(
             status: 404,
             body: { error: "not_found" },
           };
+        }
+
+        // PR3 — per-client RBAC fallback when org role denied.
+        if (!hasOrgPermission) {
+          const effective = await loadEffectiveRole(tx, {
+            userId,
+            clientId: before.clientId,
+            orgRole: role,
+          });
+          if (!can(effective, "invoice.reject")) {
+            return {
+              status: 403,
+              body: {
+                error: "forbidden",
+                message: `${effective} lacks invoice.reject`,
+              },
+            };
+          }
         }
 
         // PR2 — separation of duties (review #2). Symmetric with approve.

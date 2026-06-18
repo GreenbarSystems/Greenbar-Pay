@@ -40,15 +40,22 @@ export async function handleExportInvoices(
   const { exportId, organizationId } = job.data;
 
   // ── 1. Claim ──────────────────────────────────────────────────────────
+  // PR3 — review #11: claim accepts `created` OR `failed`. Without this,
+  // a transient failure (S3 5xx, DB blip) put the export row into
+  // `failed` permanently — no retry could ever advance it, and the
+  // maker (POST /api/ap/exports) couldn't re-run since its exportId is
+  // baked into the audit + idempotency cache. Now: pg-boss retries can
+  // re-claim a failed run; the error_message is cleared on re-claim so
+  // a later inspector sees only the current failure (if any).
   const claimed = await withOrgAsWorker(organizationId, async (tx) => {
     const rows = await tx
       .update(exportsTable)
-      .set({ status: "running" })
+      .set({ status: "running", errorMessage: null })
       .where(
         and(
           eq(exportsTable.id, exportId),
           eq(exportsTable.organizationId, organizationId),
-          eq(exportsTable.status, "created"),
+          inArray(exportsTable.status, ["created", "failed"]),
         ),
       )
       .returning({
@@ -59,7 +66,9 @@ export async function handleExportInvoices(
   });
 
   if (!claimed) {
-    console.log(`[export-invoices] export=${exportId} not in 'created'; skipping`);
+    console.log(
+      `[export-invoices] export=${exportId} not claimable (not in created|failed); skipping`,
+    );
     return;
   }
 

@@ -116,40 +116,27 @@ export async function POST(req: Request) {
     throw err;
   }
 
-  // Insert document row first so we have an ID for the storage key. The
-  // unique (organization_id, content_hash) index dedups (§4.1).
+  // PR3 — review #8/#9: insert is concurrent-safe and partial-failure-
+  // recoverable.
+  //
+  //   #9: two simultaneous uploads of the same file used to lose one
+  //       to a unique-violation 500. Now: ON CONFLICT DO NOTHING +
+  //       refetch.
+  //   #8: a doc whose first PUT failed mid-flight (row exists, bytes
+  //       don't) used to be permanently stuck in `received` because
+  //       the dedup branch always returned `dedup:true` with no
+  //       repair. Now: if the existing row's status is still
+  //       `received`, we treat the call as a repair — re-upload the
+  //       bytes and re-enqueue process-document.
+  //
+  // The unique (organization_id, content_hash) index dedups (§4.1).
   const result = await withOrg(organizationId, async (tx) => {
-    const existing = await tx.query.documents.findFirst({
-      where: (d, { and, eq }) =>
-        and(eq(d.organizationId, organizationId), eq(d.contentHash, inspected.contentHash)),
-      columns: { id: true, status: true, storageKey: true },
-    });
-
-    if (existing) {
-      // PR2 — review #20: the chain of custody used to begin at
-      // `document.text_extracted` (Phase 2 audit), leaving no record of
-      // who submitted what at the entry point. Record the dedup retry
-      // too so an auditor can trace re-submission attempts back to
-      // an actor + timestamp + hash.
-      await tx.insert(auditEvents).values({
-        organizationId,
-        actorType: "user",
-        actorId: userId,
-        action: "document.upload_dedup",
-        entityType: "document",
-        entityId: existing.id,
-        metadataJson: {
-          filename: file.name,
-          contentHash: inspected.contentHash,
-          mimeType: inspected.mimeType,
-          byteSize: inspected.byteSize,
-        },
-      });
-      return { dedup: true as const, document: existing };
-    }
-
     const ext = EXT_BY_MIME[inspected.mimeType] ?? "bin";
-    const [inserted] = await tx
+
+    // Attempt INSERT first; the unique-violation no-ops via ON CONFLICT.
+    // If the row already exists (either pre-existing dedup OR a racing
+    // first-writer), `inserted` is empty and we fall through to lookup.
+    const inserted = await tx
       .insert(documents)
       .values({
         organizationId,
@@ -157,58 +144,135 @@ export async function POST(req: Request) {
         source: "upload",
         originalFilename: file.name,
         mimeType: inspected.mimeType,
-        // storageKey is populated below after we know the ID.
         storageKey: "pending",
         contentHash: inspected.contentHash,
         createdBy: userId,
       })
+      .onConflictDoNothing({
+        target: [documents.organizationId, documents.contentHash],
+      })
       .returning({ id: documents.id });
 
-    const key = documentStorageKey({
-      organizationId,
-      documentId: inserted.id,
-      extension: ext,
+    if (inserted.length > 0) {
+      // First-writer path — we own the row. Populate the storage key
+      // and emit the chain-of-custody event.
+      const key = documentStorageKey({
+        organizationId,
+        documentId: inserted[0].id,
+        extension: ext,
+      });
+      await tx
+        .update(documents)
+        .set({ storageKey: key })
+        .where(eq(documents.id, inserted[0].id));
+
+      await tx.insert(auditEvents).values({
+        organizationId,
+        actorType: "user",
+        actorId: userId,
+        action: "document.uploaded",
+        entityType: "document",
+        entityId: inserted[0].id,
+        metadataJson: {
+          filename: file.name,
+          contentHash: inspected.contentHash,
+          mimeType: inspected.mimeType,
+          byteSize: inspected.byteSize,
+          clientId,
+        },
+      });
+
+      return {
+        kind: "fresh" as const,
+        document: { id: inserted[0].id, status: "received" as const, storageKey: key },
+      };
+    }
+
+    // Conflict path — refetch the existing row and decide between true
+    // dedup vs. partial-failure repair.
+    const existing = await tx.query.documents.findFirst({
+      where: (d, { and, eq }) =>
+        and(eq(d.organizationId, organizationId), eq(d.contentHash, inspected.contentHash)),
+      columns: { id: true, status: true, storageKey: true },
     });
+    if (!existing) {
+      // Vanishingly rare — would only happen if the dedup index
+      // disagrees with the column lookup (corruption). Fail loud.
+      throw new Error(
+        `upload: ON CONFLICT fired but no existing row found for hash ${inspected.contentHash}`,
+      );
+    }
 
-    await tx
-      .update(documents)
-      .set({ storageKey: key })
-      .where(eq(documents.id, inserted.id));
+    const isRepairableStuck =
+      existing.status === "received" &&
+      (existing.storageKey === "pending" || existing.storageKey.length === 0);
 
-    // PR2 — review #20: chain of custody starts here. createdBy + filename
-    // + content hash give an auditor everything they need to bind the
-    // upload to an actor before any extraction has run.
+    if (isRepairableStuck) {
+      // The bytes never landed in storage on the first attempt.
+      // Fix the storage_key (it may have been left as "pending") and
+      // signal the caller to redo the putObject + enqueue. The audit
+      // event records the repair so the duplicate retry isn't
+      // misread as a fresh upload.
+      const repairKey = documentStorageKey({
+        organizationId,
+        documentId: existing.id,
+        extension: ext,
+      });
+      await tx
+        .update(documents)
+        .set({ storageKey: repairKey })
+        .where(eq(documents.id, existing.id));
+
+      await tx.insert(auditEvents).values({
+        organizationId,
+        actorType: "user",
+        actorId: userId,
+        action: "document.upload_repaired",
+        entityType: "document",
+        entityId: existing.id,
+        metadataJson: {
+          filename: file.name,
+          contentHash: inspected.contentHash,
+          previousStorageKey: existing.storageKey,
+        },
+      });
+
+      return {
+        kind: "repair" as const,
+        document: { id: existing.id, status: "received" as const, storageKey: repairKey },
+      };
+    }
+
+    // True dedup — bytes are already there, processing is in flight
+    // or complete. Record the resubmit attempt for the trail.
     await tx.insert(auditEvents).values({
       organizationId,
       actorType: "user",
       actorId: userId,
-      action: "document.uploaded",
+      action: "document.upload_dedup",
       entityType: "document",
-      entityId: inserted.id,
+      entityId: existing.id,
       metadataJson: {
         filename: file.name,
         contentHash: inspected.contentHash,
         mimeType: inspected.mimeType,
         byteSize: inspected.byteSize,
-        clientId,
+        existingStatus: existing.status,
       },
     });
-
-    return {
-      dedup: false as const,
-      document: { id: inserted.id, status: "received" as const, storageKey: key },
-    };
+    return { kind: "dedup" as const, document: existing };
   });
 
-  if (!result.dedup) {
+  // Storage + enqueue happen for fresh uploads AND repairs. The job is
+  // idempotent on documentId so a repair re-enqueue is safe even if the
+  // first run is somehow still active in the queue.
+  if (result.kind !== "dedup") {
     await storage.putObject({
       key: result.document.storageKey,
       body: inspected.buf,
       contentType: inspected.mimeType,
     });
 
-    // Enqueue extraction. Job is keyed on documentId — the handler's
-    // compare-and-set on status makes duplicate deliveries safe (§4.4/§4.5).
     const boss = await getQueue();
     await boss.send(
       JOB.processDocument,
@@ -217,18 +281,24 @@ export async function POST(req: Request) {
     );
   }
 
+  // Response shape: `dedup` boolean remains for client back-compat —
+  // existing UploadForm checks it. `kind` is the precise outcome
+  // ('fresh' | 'repair' | 'dedup') for any caller that wants to
+  // distinguish a partial-failure recovery from a no-op resubmit.
+  const httpStatus = result.kind === "fresh" ? 201 : 200;
   const body = {
     documentId: result.document.id,
     status: result.document.status,
-    dedup: result.dedup,
+    dedup: result.kind === "dedup",
+    kind: result.kind,
   };
 
   if (idemKey) {
     await writeIdempotencyKey(organizationId, idemKey, requestHash, {
-      status: result.dedup ? 200 : 201,
+      status: httpStatus,
       body,
     });
   }
 
-  return NextResponse.json(body, { status: result.dedup ? 200 : 201 });
+  return NextResponse.json(body, { status: httpStatus });
 }

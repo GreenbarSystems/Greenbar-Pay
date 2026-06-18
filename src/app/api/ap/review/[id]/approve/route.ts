@@ -32,7 +32,7 @@ import {
   auditEvents,
   documents,
 } from "@/db/schema";
-import { requirePermission } from "@/lib/rbac";
+import { can, loadEffectiveRole } from "@/lib/rbac";
 import { withIdempotency } from "@/lib/review/idempotencyWrap";
 import {
   requireUuid,
@@ -51,11 +51,11 @@ export async function POST(
   if (!session?.user) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   const { organizationId, role, id: userId } = session.user;
 
-  try {
-    requirePermission(role, "invoice.approve");
-  } catch (err) {
-    return NextResponse.json({ error: (err as Error).message }, { status: 403 });
-  }
+  // PR3 — review #16: org-role check is now the cheap fast path; if the
+  // org-wide role doesn't grant, fall through to the per-client lookup
+  // inside the tx (after we know the invoice's clientId). Skips a DB
+  // round trip for the common case where the org role already permits.
+  const hasOrgPermission = can(role, "invoice.approve");
 
   return withIdempotency(
     req,
@@ -120,6 +120,26 @@ export async function POST(
             status: 404,
             body: { error: "not_found" },
           };
+        }
+
+        // PR3 — per-client RBAC. If org role didn't grant, look up the
+        // user's role for THIS client and compose. Per §1.5 effective
+        // permission = max(orgRole, clientRole).
+        if (!hasOrgPermission) {
+          const effective = await loadEffectiveRole(tx, {
+            userId,
+            clientId: before.clientId,
+            orgRole: role,
+          });
+          if (!can(effective, "invoice.approve")) {
+            return {
+              status: 403,
+              body: {
+                error: "forbidden",
+                message: `${effective} lacks invoice.approve`,
+              },
+            };
+          }
         }
 
         // PR2 — separation of duties (review #2):
