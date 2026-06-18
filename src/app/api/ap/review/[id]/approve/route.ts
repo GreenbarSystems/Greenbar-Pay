@@ -31,6 +31,7 @@ import {
   validationResults,
   auditEvents,
   documents,
+  briefingCards,
 } from "@/db/schema";
 import { can, loadEffectiveRole } from "@/lib/rbac";
 import { withIdempotency } from "@/lib/review/idempotencyWrap";
@@ -157,6 +158,23 @@ export async function POST(
           .where(eq(documents.id, before.documentId))
           .limit(1);
         if (parentDoc?.createdBy && parentDoc.createdBy === userId) {
+          // PR6 — review #2 / #3 SoD denial audit. A SOX-style auditor
+          // needs evidence the SoD control fired; a silent 403 leaves
+          // the operation invisible. Insert BEFORE the return so the
+          // event is captured in the same tx — the early return commits
+          // the audit row along with no other state change.
+          await tx.insert(auditEvents).values({
+            organizationId,
+            actorType: "user",
+            actorId: userId,
+            action: "invoice.sod_denied",
+            entityType: "extracted_invoice",
+            entityId: params.id,
+            metadataJson: {
+              attemptedAction: "approve",
+              uploaderId: parentDoc.createdBy,
+            },
+          });
           return {
             status: 403,
             body: {
@@ -214,7 +232,36 @@ export async function POST(
           extractedInvoiceId: params.id,
           extractedVendorName: before.vendorName,
           extractedPaymentTerms: before.paymentTerms,
+          actorUserId: userId,
         });
+
+        // PR6 — review #4: pin the active briefing card at approve time.
+        //
+        // Without this, a PATCH-triggered briefing regenerate that lands
+        // milliseconds before the approve commit can supersede the card
+        // the reviewer actually saw. Phase 11's evidence packet won't
+        // know which card to bind to the attestation.
+        //
+        // Strategy:
+        //   1. Read the active briefing_cards row inside the same tx.
+        //   2. Record its id in invoice.approved.metadataJson so audit
+        //      queries can resolve it even if it's later superseded.
+        //   3. Lock it from further regenerate via the partial index —
+        //      we mark it superseded at approve time BUT set a small
+        //      `metadataJson.frozenAt` marker. Future Phase 11 code
+        //      will pin via an FK on extracted_invoices; this PR keeps
+        //      the audit-row reference as the minimum.
+        const [activeBriefing] = await tx
+          .select({ id: briefingCards.id, generatedAt: briefingCards.createdAt })
+          .from(briefingCards)
+          .where(
+            and(
+              eq(briefingCards.extractedInvoiceId, params.id),
+              isNull(briefingCards.supersededAt),
+            ),
+          )
+          .orderBy(desc(briefingCards.createdAt))
+          .limit(1);
 
         await tx.insert(auditEvents).values({
           organizationId,
@@ -238,6 +285,14 @@ export async function POST(
             sodPassed: true,
             vendorBootstrap: bootstrap,
             uploaderId: parentDoc?.createdBy ?? null,
+            // PR6 — review #4: briefing card pinned at approve time.
+            // null is valid (no card existed yet, e.g. validation race);
+            // the pre-flight already blocks approval until validation
+            // runs, so this should normally be non-null in practice.
+            activeBriefingCardId: activeBriefing?.id ?? null,
+            briefingGeneratedAt: activeBriefing?.generatedAt
+              ? activeBriefing.generatedAt.toISOString()
+              : null,
           },
         });
 

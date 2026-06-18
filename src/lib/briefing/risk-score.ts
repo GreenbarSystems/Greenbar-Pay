@@ -22,6 +22,20 @@
  * justification prose can reference the strongest contributing factor.
  */
 
+/**
+ * PR6 — review #4: version tag for the weight table.
+ *
+ * Bump on ANY change to WEIGHTS (or to the formula in computeRiskScore).
+ * Stored on briefing_cards.risk_score_version so an auditor can
+ * reproduce a historical score by checking out the matching commit.
+ *
+ * Bumping policy: monotonically increasing, dotted, semver-flavored.
+ * Major bumps for a re-weight that materially changes the band
+ * distribution; minor for adding a factor; patch for tightening
+ * descriptions.
+ */
+export const RISK_SCORE_VERSION = "1.0.0";
+
 export interface RiskFactor {
   code: string;
   weight: number;

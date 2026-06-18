@@ -15,8 +15,9 @@ import {
   extractedInvoices,
   documents,
 } from "@/db/schema";
-import { and, desc, eq, inArray } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull } from "drizzle-orm";
 import { requireUuid } from "@/lib/route-helpers";
+import { loadPermittedClientIds } from "@/lib/rbac/client-scope";
 
 export default async function VendorDetailPage({
   params,
@@ -28,7 +29,7 @@ export default async function VendorDetailPage({
 
   const session = await auth();
   if (!session?.user) return null;
-  const { organizationId } = session.user;
+  const { organizationId, role, id: userId } = session.user;
 
   const data = await withOrg(organizationId, async (tx) => {
     const [vendor] = await tx
@@ -43,10 +44,25 @@ export default async function VendorDetailPage({
       .limit(1);
     if (!vendor) return null;
 
+    // PR6 — review #5: per-client read scope. If the user can't see
+    // this vendor's client, return null → notFound() falls through.
+    // 404 is intentional — leaks no signal about whether the vendor
+    // exists in a client the user can't see.
+    const permitted = await loadPermittedClientIds(tx, { userId, orgRole: role });
+    if (permitted !== null && vendor.clientId !== null) {
+      if (!permitted.includes(vendor.clientId)) return null;
+    }
+
+    // PR6: pricing history is append-only — display only the active rows.
     const pricing = await tx
       .select()
       .from(vendorPricingHistory)
-      .where(eq(vendorPricingHistory.vendorId, vendor.id))
+      .where(
+        and(
+          eq(vendorPricingHistory.vendorId, vendor.id),
+          isNull(vendorPricingHistory.supersededAt),
+        ),
+      )
       .orderBy(desc(vendorPricingHistory.samples))
       .limit(20);
 

@@ -43,7 +43,7 @@ import {
   auditEvents,
 } from "@/db/schema";
 import { LOW_TEXT_LENGTH } from "@/lib/ocr/text-quality";
-import { computeRiskScore } from "@/lib/briefing/risk-score";
+import { computeRiskScore, RISK_SCORE_VERSION } from "@/lib/briefing/risk-score";
 import { dispatchBriefingCardGeneration } from "@/lib/llm";
 import { scrubError } from "@/lib/llm/scrub";
 import type { JobPayloads } from "@/lib/queue";
@@ -332,6 +332,8 @@ export async function handleGenerateBriefingCard(
       deltaSummary: r.deltaSummary,
       riskScore: prep.risk.score,
       riskJustification: r.riskJustification,
+      // PR6 — review #4: version tag pinned to the runtime constant.
+      riskScoreVersion: RISK_SCORE_VERSION,
       vendorContextJson: prep.vendorProfile,
       riskFactorsJson: prep.risk.factors,
     });
@@ -345,6 +347,7 @@ export async function handleGenerateBriefingCard(
       metadataJson: {
         llmRunId: run.id,
         riskScore: prep.risk.score,
+        riskScoreVersion: RISK_SCORE_VERSION,
         anomalyFlagCount: r.anomalyFlags.length,
         glCode: r.glCode,
       },

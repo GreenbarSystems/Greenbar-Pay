@@ -306,9 +306,31 @@ export async function handleRecomputeVendorProfile(
       }
     }
 
+    // PR6 — review #4: vendor_pricing_history is now append-only. For
+    // every (vendor, keyword) computed this run:
+    //   1. Soft-supersede the active row (if any) with `superseded_at`.
+    //   2. INSERT a fresh row. The partial unique index
+    //      `uniq_vendor_pricing_active` enforces at most one active
+    //      row per (vendor, keyword).
+    // Prior aggregates remain queryable for the rate-drift validation
+    // rule and the future evidence packet.
     for (const [keyword, agg] of grouped) {
       const samples = Math.min(agg.count, PRICING_SAMPLE_CAP);
       const avgPrice = agg.sum / agg.count;
+
+      await tx
+        .update(vendorPricingHistory)
+        .set({ supersededAt: sql`now()` })
+        .where(
+          and(
+            eq(vendorPricingHistory.vendorId, vendorId),
+            eq(vendorPricingHistory.itemKeyword, keyword),
+            // isNull would be cleaner but we already filter to active
+            // via the value comparison.
+            sql`${vendorPricingHistory.supersededAt} is null`,
+          ),
+        );
+
       await tx
         .insert(vendorPricingHistory)
         .values({
@@ -318,14 +340,6 @@ export async function handleRecomputeVendorProfile(
           avgUnitPrice: avgPrice.toFixed(4),
           samples,
           lastSeenAt: agg.latest,
-        })
-        .onConflictDoUpdate({
-          target: [vendorPricingHistory.vendorId, vendorPricingHistory.itemKeyword],
-          set: {
-            avgUnitPrice: avgPrice.toFixed(4),
-            samples,
-            lastSeenAt: agg.latest,
-          },
         });
     }
 
