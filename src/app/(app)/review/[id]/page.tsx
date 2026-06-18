@@ -96,8 +96,22 @@ export default async function ReviewDetailPage({
 
     // Phase 8 — D2: pull the active briefing card (filtered to
     // superseded_at IS NULL — same append-only pattern as validation).
+    //
+    // PR7 — review #5: explicit projection. The review detail UI only
+    // renders these fields; selecting * also dragged vendor_context_json
+    // and risk_factors_json (full snapshot blobs) over the wire and into
+    // server memory for nothing. Evidence packet (Phase 11) re-fetches
+    // the full row from the DB; UI doesn't need it here.
     const [briefingCard] = await tx
-      .select()
+      .select({
+        glCode: briefingCards.glCode,
+        glRationale: briefingCards.glRationale,
+        anomalyFlagsJson: briefingCards.anomalyFlagsJson,
+        deltaSummary: briefingCards.deltaSummary,
+        riskScore: briefingCards.riskScore,
+        riskJustification: briefingCards.riskJustification,
+        createdAt: briefingCards.createdAt,
+      })
       .from(briefingCards)
       .where(
         and(

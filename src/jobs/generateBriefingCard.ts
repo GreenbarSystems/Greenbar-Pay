@@ -268,7 +268,7 @@ export async function handleGenerateBriefingCard(
         : outcome.kind === "provider_error"
           ? scrubError(outcome.error).message.slice(0, 500)
           : outcome.kind === "non_compliant_model"
-            ? outcome.error.message
+            ? `non_compliant_model: ${scrubError(outcome.error).message.slice(0, 300)}`
             : outcome.kind === "text_too_large"
               ? "input too large"
               : outcome.kind === "quota_exceeded"

@@ -16,7 +16,7 @@
  *   5. Audit event.
  */
 import type PgBoss from "pg-boss";
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import { withOrgAsWorker } from "@/db/client";
 import {
   documents,
@@ -61,7 +61,11 @@ export async function handleValidateExtractedInvoice(
       .update(extractedInvoices)
       .set({
         reviewStatus: out.newReviewStatus,
-        updatedAt: new Date(),
+        // PR7 — review #4: use DB clock (sql`now()`) so updatedAt aligns
+        // with the transaction commit timestamp regardless of worker
+        // clock drift. Matches the pattern PR1 standardized for the
+        // approve/reject reviewedAt.
+        updatedAt: sql`now()`,
       })
       .where(
         and(
