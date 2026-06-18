@@ -30,6 +30,7 @@ import {
 } from "@/db/schema";
 import { storage, exportStorageKey } from "@/lib/storage";
 import { toCsv, toJson, type ExportRow } from "@/lib/export/format";
+import { scrubError } from "@/lib/llm/scrub";
 import type { JobPayloads } from "@/lib/queue";
 import { JOB } from "@/lib/queue";
 
@@ -66,12 +67,15 @@ export async function handleExportInvoices(
     await runExport(exportId, organizationId, claimed.format);
   } catch (err) {
     // Mark failed and let pg-boss replay according to retry policy.
+    // Scrub before persisting — runExport's failure may carry SDK or
+    // SQL fragments with vendor / invoice content (§2.4).
+    const scrubbedMessage = scrubError(err).message.slice(0, 500);
     await withOrgAsWorker(organizationId, async (tx) => {
       await tx
         .update(exportsTable)
         .set({
           status: "failed",
-          errorMessage: (err as Error).message.slice(0, 500),
+          errorMessage: scrubbedMessage,
         })
         .where(eq(exportsTable.id, exportId));
       await tx.insert(auditEvents).values({
@@ -80,7 +84,7 @@ export async function handleExportInvoices(
         action: "export.failed",
         entityType: "export",
         entityId: exportId,
-        metadataJson: { reason: (err as Error).message.slice(0, 500) },
+        metadataJson: { reason: scrubbedMessage },
       });
     });
     throw err;

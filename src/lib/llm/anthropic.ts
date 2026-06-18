@@ -15,6 +15,7 @@ import {
   InvoiceExtractionSchema,
   type InvoiceExtractionResult,
 } from "./schema";
+import { scrubError } from "./scrub";
 
 export class InvoiceSchemaError extends Error {
   readonly code = "schema_failed";
@@ -29,12 +30,15 @@ export class ProviderError extends Error {
   readonly code = "provider_error";
   readonly cause: unknown;
   constructor(cause: unknown) {
-    super(
-      cause instanceof Error
-        ? `anthropic dispatch failed: ${cause.message}`
-        : "anthropic dispatch failed",
-    );
-    this.cause = cause;
+    // SDK errors (esp. Anthropic 4xx) frequently echo fragments of the
+    // request body in `.message`. Run the cause through scrubError before
+    // building this message so the resulting `.message` never carries
+    // raw payload data — it's the value stored on `llm_runs.error_message`
+    // and surfaced anywhere this Error.message is read.
+    const scrubbed = scrubError(cause);
+    super(`anthropic dispatch failed: ${scrubbed.message}`);
+    // Keep the (already-scrubbed) cause so consumers can introspect.
+    this.cause = scrubbed;
   }
 }
 

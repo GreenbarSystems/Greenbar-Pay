@@ -19,6 +19,7 @@ import { withOrg } from "@/db/client";
 import { extractedInvoices, auditEvents } from "@/db/schema";
 import { requirePermission } from "@/lib/rbac";
 import { runValidationInTx } from "@/lib/validation/run";
+import { requireUuid } from "@/lib/route-helpers";
 
 // Only header fields are editable from the review UI. Line items get their
 // own endpoint in a follow-up; for now they remain as the LLM extracted.
@@ -54,6 +55,9 @@ export async function PATCH(
   req: Request,
   { params }: { params: { id: string } },
 ) {
+  const bad = requireUuid(params.id);
+  if (bad) return bad;
+
   const session = await auth();
   if (!session?.user) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   const { organizationId, role, id: userId } = session.user;

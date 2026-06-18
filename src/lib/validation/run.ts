@@ -72,8 +72,14 @@ export async function runValidationInTx(
     .where(eq(extractedInvoiceLines.extractedInvoiceId, args.extractedInvoiceId));
 
   // 2. Prior approved/exported (vendor, invoice_number) pairs for dedup.
+  //
+  // We select id explicitly so the self-exclusion filter below actually
+  // compares uuid-to-uuid. The earlier version omitted id from the
+  // projection, making `r.id !== args.extractedInvoiceId` an
+  // `undefined !== uuid` test that always passed.
   const priorRows = await tx
     .select({
+      id: extractedInvoices.id,
       vendorName: extractedInvoices.vendorName,
       invoiceNumber: extractedInvoices.invoiceNumber,
     })

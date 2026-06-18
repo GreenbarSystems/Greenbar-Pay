@@ -11,6 +11,7 @@ import { withOrg } from "@/db/client";
 import { exports as exportsTable } from "@/db/schema";
 import { requirePermission } from "@/lib/rbac";
 import { storage } from "@/lib/storage";
+import { requireUuid } from "@/lib/route-helpers";
 
 const SIGNED_URL_TTL_SECONDS = 120;
 
@@ -18,6 +19,9 @@ export async function GET(
   _req: Request,
   { params }: { params: { id: string } },
 ) {
+  const bad = requireUuid(params.id);
+  if (bad) return bad;
+
   const session = await auth();
   if (!session?.user) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   const { organizationId, role } = session.user;
