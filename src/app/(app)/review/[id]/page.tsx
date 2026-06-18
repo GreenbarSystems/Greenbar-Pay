@@ -8,6 +8,7 @@ import {
   validationResults,
   vendorMatches,
   vendors,
+  briefingCards,
   auditEvents,
 } from "@/db/schema";
 import { and, desc, eq, isNull } from "drizzle-orm";
@@ -93,6 +94,20 @@ export default async function ReviewDetailPage({
       .orderBy(desc(auditEvents.createdAt))
       .limit(20);
 
+    // Phase 8 — D2: pull the active briefing card (filtered to
+    // superseded_at IS NULL — same append-only pattern as validation).
+    const [briefingCard] = await tx
+      .select()
+      .from(briefingCards)
+      .where(
+        and(
+          eq(briefingCards.extractedInvoiceId, invoice.id),
+          isNull(briefingCards.supersededAt),
+        ),
+      )
+      .orderBy(desc(briefingCards.createdAt))
+      .limit(1);
+
     return {
       invoice,
       doc,
@@ -100,6 +115,7 @@ export default async function ReviewDetailPage({
       latestValidation,
       latestVendorMatch,
       vendorProfile,
+      briefingCard,
       audits,
     };
   });
@@ -157,6 +173,25 @@ export default async function ReviewDetailPage({
               termsDriftDetected: data.vendorProfile.termsDriftDetected,
               duplicateSubmissionCount: data.vendorProfile.duplicateSubmissionCount,
               lastInvoiceDate: data.vendorProfile.lastInvoiceDate,
+            }
+          : null
+      }
+      briefingCard={
+        data.briefingCard
+          ? {
+              glCode: data.briefingCard.glCode,
+              glRationale: data.briefingCard.glRationale,
+              anomalyFlags: Array.isArray(data.briefingCard.anomalyFlagsJson)
+                ? (data.briefingCard.anomalyFlagsJson as Array<{
+                    code: string;
+                    severity: "info" | "warning" | "critical";
+                    message: string;
+                  }>)
+                : [],
+              deltaSummary: data.briefingCard.deltaSummary,
+              riskScore: data.briefingCard.riskScore,
+              riskJustification: data.briefingCard.riskJustification,
+              generatedAt: data.briefingCard.createdAt.toISOString(),
             }
           : null
       }

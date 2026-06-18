@@ -1,21 +1,35 @@
 /**
- * LLM gateway — the single entry point for invoice extraction.
+ * LLM gateway — the single entry point for ALL invoice-related model
+ * dispatches (extraction, briefing card, coaching).
  *
  * Concerns owned here (addendum):
  *   - §2.2  compliance check before any dispatch;
- *   - §2.3  prompt is built via buildExtractionPrompt — nothing else;
+ *   - §2.3  prompts are built via dedicated builders (buildExtractionPrompt,
+ *           buildBriefingCardPrompt, …) — nothing else;
  *   - §2.4  no payload-bearing logging (callers use scrub() if needed);
  *   - §2.7  pre-flight: token cap, daily quota, circuit breaker;
  *           post-flight: circuit recordOutcome();
  *   - §"Retry malformed JSON": one correction retry on schema_failed
  *                              before bubbling the failure.
  *
+ * Phase 8 generalized the dispatch path so a single core (runDispatch<T>)
+ * serves Call 1 (invoice), Call 2 (briefing), and Call 3 (coaching).
+ * Each public entry point is a thin wrapper that supplies its own prompt
+ * builder + Zod schema; the wrapper records its own promptName/version
+ * on the llm_runs row.
+ *
  * The gateway DOES NOT write to the database. It returns a structured
- * outcome describing what happened (success, schema fail, etc.) plus
- * the data the caller needs to write llm_runs / extracted_invoices.
- * The job decides the persistence story.
+ * outcome describing what happened (success, schema fail, etc.); the
+ * caller decides the persistence story.
  */
+import type { ZodType } from "zod";
 import { buildExtractionPrompt, PROMPT_NAME, PROMPT_VERSION } from "./prompt";
+import {
+  buildBriefingCardPrompt,
+  BRIEFING_PROMPT_NAME,
+  BRIEFING_PROMPT_VERSION,
+  type BriefingPromptInput,
+} from "./briefing-card-prompt";
 import {
   assertCompliantForInvoiceData,
   DEFAULT_INVOICE_MODEL,
@@ -23,19 +37,24 @@ import {
 } from "./registry";
 import {
   dispatchAnthropic,
-  InvoiceSchemaError,
+  LlmSchemaError,
   ProviderError,
 } from "./anthropic";
-import type { InvoiceExtractionResult } from "./schema";
+import { InvoiceExtractionSchema, type InvoiceExtractionResult } from "./schema";
+import {
+  BriefingCardSchema,
+  type BriefingCardResult,
+} from "./briefing-card-schema";
 import { checkCircuit, recordOutcome } from "./circuit";
 import { quotaRemaining } from "./quota";
+import type { BuiltPrompt } from "./prompt";
 
 /** Phase 3 cap (§2.7): ~80k tokens ≈ 320k chars. */
 export const MAX_INPUT_CHARS = 320_000;
 
-export type DispatchOutcome =
-  | { kind: "succeeded"; result: InvoiceExtractionResult; meta: DispatchMeta }
-  | { kind: "schema_failed"; error: InvoiceSchemaError; meta: DispatchMeta }
+export type DispatchOutcome<T> =
+  | { kind: "succeeded"; result: T; meta: DispatchMeta }
+  | { kind: "schema_failed"; error: LlmSchemaError; meta: DispatchMeta }
   | { kind: "provider_error"; error: ProviderError; meta: DispatchMeta }
   | { kind: "text_too_large"; charCount: number; meta: PreFlightMeta }
   | { kind: "quota_exceeded"; remaining: 0; meta: PreFlightMeta }
@@ -56,30 +75,36 @@ export interface DispatchMeta extends PreFlightMeta {
   rawToolInput?: unknown;
 }
 
-interface GatewayInput {
+/**
+ * Core dispatch — generic over the parsed result type. Handles
+ * compliance, token cap, quota, circuit, dispatch, and the §"Retry
+ * malformed JSON" single correction retry.
+ *
+ * Callers supply:
+ *   - inputCharCount: drives the §2.7 text_too_large pre-flight
+ *   - prompt: pre-built BuiltPrompt (already hashed + tokens estimated)
+ *   - outputSchema: Zod schema for decoding the tool_use input
+ *
+ * Compliance + quota use the existing invoice-traffic gates — Phase 8's
+ * three call types all carry the same vendor/financial data and so
+ * share the same registry whitelist.
+ */
+async function runDispatch<T>(args: {
   organizationId: string;
-  documentText: string;
-  mimeType: string;
-  pageCount: number | null;
+  inputCharCount: number;
+  prompt: BuiltPrompt;
+  outputSchema: ZodType<T>;
+  promptName: string;
+  promptVersion: string;
   modelId?: string;
   now?: number;
-}
-
-/**
- * Run an invoice extraction through the full gateway pipeline.
- * Performs the §"Retry malformed JSON" single correction retry inline:
- * if the first dispatch returns schema_failed, we retry once with the
- * Zod issue list as the correction context.
- */
-export async function dispatchInvoiceExtraction(
-  input: GatewayInput,
-): Promise<DispatchOutcome> {
-  const modelId = input.modelId ?? DEFAULT_INVOICE_MODEL;
-  const now = input.now ?? Date.now();
+}): Promise<DispatchOutcome<T>> {
+  const modelId = args.modelId ?? DEFAULT_INVOICE_MODEL;
+  const now = args.now ?? Date.now();
   const baseMeta: PreFlightMeta = {
     modelId,
-    promptName: PROMPT_NAME,
-    promptVersion: PROMPT_VERSION,
+    promptName: args.promptName,
+    promptVersion: args.promptVersion,
   };
 
   // ── Pre-flight: compliance (§2.2) ─────────────────────────────────────
@@ -95,16 +120,16 @@ export async function dispatchInvoiceExtraction(
   }
 
   // ── Pre-flight: input size (§2.7) ─────────────────────────────────────
-  if (input.documentText.length > MAX_INPUT_CHARS) {
+  if (args.inputCharCount > MAX_INPUT_CHARS) {
     return {
       kind: "text_too_large",
-      charCount: input.documentText.length,
+      charCount: args.inputCharCount,
       meta: baseMeta,
     };
   }
 
   // ── Pre-flight: daily quota (§2.7) ────────────────────────────────────
-  const remaining = await quotaRemaining(input.organizationId);
+  const remaining = await quotaRemaining(args.organizationId);
   if (remaining <= 0) {
     return { kind: "quota_exceeded", remaining: 0, meta: baseMeta };
   }
@@ -115,29 +140,23 @@ export async function dispatchInvoiceExtraction(
     return { kind: "circuit_open", meta: baseMeta };
   }
 
-  // ── Build prompt (§2.3) ───────────────────────────────────────────────
-  const prompt = buildExtractionPrompt({
-    documentText: input.documentText,
-    mimeType: input.mimeType,
-    pageCount: input.pageCount,
-  });
-
   const dispatchMeta: DispatchMeta = {
     ...baseMeta,
-    inputHash: prompt.inputHash,
-    inputTokensEstimate: prompt.estimatedTokens,
+    inputHash: args.prompt.inputHash,
+    inputTokensEstimate: args.prompt.estimatedTokens,
     durationMs: 0,
   };
 
   // ── First dispatch ────────────────────────────────────────────────────
   const t0 = now;
-  let outcome: DispatchOutcome;
   try {
     const out = await dispatchAnthropic({
       apiModelId: model.apiModelId,
-      prompt,
+      prompt: args.prompt,
+      outputSchema: args.outputSchema,
     });
-    outcome = {
+    recordOutcome(model.provider, "ok", Date.now());
+    return {
       kind: "succeeded",
       result: out.result,
       meta: {
@@ -146,16 +165,15 @@ export async function dispatchInvoiceExtraction(
         rawToolInput: out.rawToolInput,
       },
     };
-    recordOutcome(model.provider, "ok", Date.now());
-    return outcome;
   } catch (err) {
-    if (err instanceof InvoiceSchemaError) {
+    if (err instanceof LlmSchemaError) {
       // §"Retry malformed JSON": one correction attempt.
       const t1 = Date.now();
       try {
         const out = await dispatchAnthropic({
           apiModelId: model.apiModelId,
-          prompt,
+          prompt: args.prompt,
+          outputSchema: args.outputSchema,
           correctionContext:
             "Your previous output failed schema validation with these issues: " +
             JSON.stringify(err.issues).slice(0, 500) +
@@ -173,7 +191,7 @@ export async function dispatchInvoiceExtraction(
         };
       } catch (retryErr) {
         recordOutcome(model.provider, "error", Date.now());
-        if (retryErr instanceof InvoiceSchemaError) {
+        if (retryErr instanceof LlmSchemaError) {
           return {
             kind: "schema_failed",
             error: retryErr,
@@ -199,5 +217,63 @@ export async function dispatchInvoiceExtraction(
   }
 }
 
-export { InvoiceSchemaError, ProviderError };
+// ─── Call 1: invoice extraction ──────────────────────────────────────────
+
+interface InvoiceGatewayInput {
+  organizationId: string;
+  documentText: string;
+  mimeType: string;
+  pageCount: number | null;
+  modelId?: string;
+  now?: number;
+}
+
+export async function dispatchInvoiceExtraction(
+  input: InvoiceGatewayInput,
+): Promise<DispatchOutcome<InvoiceExtractionResult>> {
+  const prompt = buildExtractionPrompt({
+    documentText: input.documentText,
+    mimeType: input.mimeType,
+    pageCount: input.pageCount,
+  });
+  return runDispatch({
+    organizationId: input.organizationId,
+    inputCharCount: input.documentText.length,
+    prompt,
+    outputSchema: InvoiceExtractionSchema,
+    promptName: PROMPT_NAME,
+    promptVersion: PROMPT_VERSION,
+    modelId: input.modelId,
+    now: input.now,
+  });
+}
+
+// ─── Call 2: briefing card (Phase 8) ─────────────────────────────────────
+
+interface BriefingGatewayInput extends BriefingPromptInput {
+  organizationId: string;
+  modelId?: string;
+  now?: number;
+}
+
+export async function dispatchBriefingCardGeneration(
+  input: BriefingGatewayInput,
+): Promise<DispatchOutcome<BriefingCardResult>> {
+  const prompt = buildBriefingCardPrompt(input);
+  return runDispatch({
+    organizationId: input.organizationId,
+    inputCharCount: prompt.userText.length,
+    prompt,
+    outputSchema: BriefingCardSchema,
+    promptName: BRIEFING_PROMPT_NAME,
+    promptVersion: BRIEFING_PROMPT_VERSION,
+    modelId: input.modelId,
+    now: input.now,
+  });
+}
+
+export { LlmSchemaError, ProviderError };
+// Re-export the prior name so existing callers keep working until they migrate.
+export { LlmSchemaError as InvoiceSchemaError } from "./anthropic";
 export type { InvoiceExtractionResult };
+export type { BriefingCardResult };

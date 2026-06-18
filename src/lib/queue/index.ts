@@ -49,6 +49,7 @@ export const JOB = {
   validateExtractedInvoice: "validate-extracted-invoice",
   exportInvoices: "export-invoices",
   recomputeVendorProfile: "recompute-vendor-profile",
+  generateBriefingCard: "generate-briefing-card",
 } as const;
 
 export type JobPayloads = {
@@ -60,4 +61,8 @@ export type JobPayloads = {
   };
   [JOB.exportInvoices]: { exportId: string; organizationId: string };
   [JOB.recomputeVendorProfile]: { vendorId: string; organizationId: string };
+  [JOB.generateBriefingCard]: {
+    extractedInvoiceId: string;
+    organizationId: string;
+  };
 };

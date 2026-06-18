@@ -30,6 +30,7 @@ import { can, loadEffectiveRole } from "@/lib/rbac";
 import { runValidationInTx } from "@/lib/validation/run";
 import { requireUuid } from "@/lib/route-helpers";
 import { withIdempotency } from "@/lib/review/idempotencyWrap";
+import { getQueue, JOB } from "@/lib/queue";
 
 // Only header fields are editable from the review UI. Line items get their
 // own endpoint in a follow-up; for now they remain as the LLM extracted.
@@ -111,7 +112,7 @@ export async function PATCH(
     `/api/ap/review/${params.id}`,
     idempotencyBody,
     async () => {
-      return withOrg(organizationId, async (tx) => {
+      const result = await withOrg(organizationId, async (tx) => {
         // Snapshot the row first — gives us the `before` for the audit event
         // and lets us bail early if it's already in a terminal state.
         const [before] = await tx
@@ -209,8 +210,28 @@ export async function PATCH(
             updatedAt: updated[0].updatedAt,
             reviewStatus: validation.newReviewStatus,
           },
+          // Phase 8 — D2: signal that the briefing must refresh after
+          // the tx commits. The wrapper below enqueues only on success.
+          enqueueBriefing: true as const,
         };
       });
+
+      // Phase 8 — D2: re-validation after a reviewer edit means the
+      // briefing card data is stale. Enqueue a fresh generation after
+      // commit. Job is idempotent + advisory-locked on the invoice id.
+      if (
+        "enqueueBriefing" in result &&
+        result.enqueueBriefing &&
+        result.status === 200
+      ) {
+        const boss = await getQueue();
+        await boss.send(
+          JOB.generateBriefingCard,
+          { extractedInvoiceId: params.id, organizationId },
+          { singletonKey: `generate-briefing-card:${params.id}` },
+        );
+      }
+      return { status: result.status, body: result.body };
     },
   );
 }
