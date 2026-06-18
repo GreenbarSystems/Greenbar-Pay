@@ -62,9 +62,17 @@ export async function bootstrapVendorOnApprove(
     .limit(1);
 
   // Branch A — exact match (canonical or alias). Vendor already linked.
+  //
+  // PR5 — review C2: legacy `vendor_matches` rows written before Phase 7
+  // have `match_method = NULL`. Migration 0011 backfills them to
+  // 'exact_normalized', but be defensive: ANY vendor_id-bearing match
+  // without a known method counts as already-linked. Without this guard,
+  // a NULL method dropped through Branch A and B to Branch C, which
+  // would try to INSERT a possibly-orphan vendor row.
   if (
     latestMatch?.vendorId &&
-    (latestMatch.matchMethod === "exact_normalized" ||
+    (latestMatch.matchMethod === null ||
+      latestMatch.matchMethod === "exact_normalized" ||
       latestMatch.matchMethod === "exact_alias")
   ) {
     return { vendorId: latestMatch.vendorId, action: "linked" };

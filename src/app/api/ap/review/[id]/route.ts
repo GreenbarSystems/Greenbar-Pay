@@ -31,6 +31,7 @@ import { runValidationInTx } from "@/lib/validation/run";
 import { requireUuid } from "@/lib/route-helpers";
 import { withIdempotency } from "@/lib/review/idempotencyWrap";
 import { getQueue, JOB } from "@/lib/queue";
+import { scrubError } from "@/lib/llm/scrub";
 
 // Only header fields are editable from the review UI. Line items get their
 // own endpoint in a follow-up; for now they remain as the LLM extracted.
@@ -219,17 +220,30 @@ export async function PATCH(
       // Phase 8 — D2: re-validation after a reviewer edit means the
       // briefing card data is stale. Enqueue a fresh generation after
       // commit. Job is idempotent + advisory-locked on the invoice id.
+      //
+      // PR5 — review C3: wrap in try/catch so a pg-boss outage doesn't
+      // propagate into the response and prevent the idempotency cache
+      // from being written. A missed enqueue means the briefing reflects
+      // the n-1 edit until the NEXT edit fires another regenerate —
+      // recoverable, not silent.
       if (
         "enqueueBriefing" in result &&
         result.enqueueBriefing &&
         result.status === 200
       ) {
-        const boss = await getQueue();
-        await boss.send(
-          JOB.generateBriefingCard,
-          { extractedInvoiceId: params.id, organizationId },
-          { singletonKey: `generate-briefing-card:${params.id}` },
-        );
+        try {
+          const boss = await getQueue();
+          await boss.send(
+            JOB.generateBriefingCard,
+            { extractedInvoiceId: params.id, organizationId },
+            { singletonKey: `generate-briefing-card:${params.id}` },
+          );
+        } catch (err) {
+          console.warn(
+            `[patch] generate-briefing-card enqueue failed for invoice=${params.id}; edit committed, briefing will refresh on next edit`,
+            scrubError(err),
+          );
+        }
       }
       return { status: result.status, body: result.body };
     },

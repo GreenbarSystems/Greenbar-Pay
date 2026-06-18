@@ -158,7 +158,11 @@ export async function handleGenerateBriefingCard(
           and(
             eq(extractedInvoices.organizationId, organizationId),
             inArray(extractedInvoices.reviewStatus, ["approved", "exported"]),
-            eq(extractedInvoices.vendorName, vendorProfile.name),
+            // PR5 — review C7: the prior-invoice lookup used case-sensitive
+            // exact match — "ABC Supplies" vs "abc supplies" would miss.
+            // Use the same SQL normalization the recompute join uses so
+            // any spelling variant resolves to the canonical vendor.
+            sql`normalize_vendor_text(${extractedInvoices.vendorName}) = ${vendorProfile.normalizedName}`,
             ne(extractedInvoices.id, extractedInvoiceId),
           ),
         )

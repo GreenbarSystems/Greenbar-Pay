@@ -25,11 +25,8 @@
 import type PgBoss from "pg-boss";
 import {
   and,
-  desc,
   eq,
-  gte,
   inArray,
-  isNull,
   or,
   sql,
 } from "drizzle-orm";
@@ -89,6 +86,16 @@ export async function handleRecomputeVendorProfile(
     //    bootstrap). For the FIRST recompute of a freshly bootstrapped
     //    vendor we still need to find their invoices; we match on the
     //    aliases the bootstrap wrote.
+    // PR5 — review C1: the original join had malformed SQL (one unclosed
+    // paren in the nested sql template) AND didn't replicate JS
+    // normalizeVendor (no whitespace collapse / trim). Now we use the
+    // `normalize_vendor_text(text)` SQL function added in sidecar 0011,
+    // which is the single source of truth for normalization in both
+    // languages.
+    //
+    // Match path: invoice's vendor_name normalized === vendor's
+    // normalized_name OR is in the vendor's aliases (already stored
+    // pre-normalized by bootstrap).
     const invoiceRows = await tx
       .select({
         id: extractedInvoices.id,
@@ -102,13 +109,8 @@ export async function handleRecomputeVendorProfile(
         and(
           eq(vendors.id, vendorId),
           or(
-            sql`lower(${extractedInvoices.vendorName}) = lower(${vendors.name})`,
-            sql`exists (
-              select 1 from unnest(${vendors.aliases}) as a
-              where a = ${sql`(
-                select lower(regexp_replace(${extractedInvoices.vendorName}, '[^a-zA-Z0-9 ]', ' ', 'g'))
-              `}
-            )`,
+            sql`normalize_vendor_text(${extractedInvoices.vendorName}) = ${vendors.normalizedName}`,
+            sql`normalize_vendor_text(${extractedInvoices.vendorName}) = ANY(${vendors.aliases})`,
           ),
         ),
       )
@@ -137,10 +139,19 @@ export async function handleRecomputeVendorProfile(
     let spend90 = 0;
     let latestDate: string | null = null;
     let latestTerms: string | null = null;
+    // PR5 — review C5: count payment_terms occurrences so we can derive
+    // the MODE rather than treating first-seen as a frozen default.
+    const termsCounts = new Map<string, number>();
 
     for (const r of invoiceRows) {
       const amt = r.total === null ? 0 : Number(r.total);
       totalSum += amt;
+      if (r.paymentTerms) {
+        termsCounts.set(
+          r.paymentTerms,
+          (termsCounts.get(r.paymentTerms) ?? 0) + 1,
+        );
+      }
       if (r.invoiceDate) {
         const d = new Date(`${r.invoiceDate}T00:00:00Z`);
         if (d >= thirtyDaysAgo) spend30 += amt;
@@ -155,28 +166,79 @@ export async function handleRecomputeVendorProfile(
     const invoiceCount = invoiceRows.length;
     const avg = invoiceCount > 0 ? totalSum / invoiceCount : 0;
 
-    // 3. Terms drift — only set when there's BOTH a stored default and a
-    // latest-invoice value to compare, and they differ.
+    // PR5 — review C5: terms_drift detection now uses the MODE of
+    // payment_terms across all approved invoices, not the first-seen
+    // default that was frozen at bootstrap.
+    //
+    // The mode also becomes the new defaultPaymentTerms, so the
+    // "default" reflects what this vendor actually invoices on
+    // consistently — once they've drifted to a new terms value
+    // permanently, that becomes the new default and drift turns off.
+    //
+    // Only meaningful at invoice_count >= 3 — matches the
+    // vendorWarmingUp gate the risk score uses. With fewer than 3,
+    // we don't claim to know what's normal for this vendor.
+    let modeTerms: string | null = null;
+    let modeCount = 0;
+    for (const [terms, count] of termsCounts) {
+      if (count > modeCount) {
+        modeTerms = terms;
+        modeCount = count;
+      }
+    }
     const termsDrift =
-      Boolean(vendor.defaultPaymentTerms) &&
+      invoiceCount >= 3 &&
       Boolean(latestTerms) &&
-      vendor.defaultPaymentTerms !== latestTerms;
+      Boolean(modeTerms) &&
+      latestTerms !== modeTerms;
 
-    // 4. Duplicate submission count — active validation_results carrying
-    // duplicate_invoice across the vendor's approved invoices.
-    const invoiceIds = invoiceRows.map((r) => r.id);
-    const [{ count: dupCount }] = await tx
-      .select({ count: sql<number>`count(*)::int` })
-      .from(validationResults)
-      .where(
-        and(
-          eq(validationResults.organizationId, organizationId),
-          eq(validationResults.entityType, "extracted_invoice"),
-          inArray(validationResults.entityId, invoiceIds),
-          isNull(validationResults.supersededAt),
-          sql`${validationResults.errorsJson} @> '[{"code":"duplicate_invoice"}]'::jsonb`,
-        ),
-      );
+    // PR5 — review C4: duplicate_submission_count semantics.
+    //
+    // The original query counted active blocking findings on approved
+    // invoices — but approve refuses 422 when blocking findings exist,
+    // so the counter could never increment. Now: count DISTINCT invoices
+    // from this vendor (any review_status, including rejected and
+    // superseded) that EVER carried a duplicate_invoice finding. This
+    // matches the spec's "duplicate pattern: count and date of prior
+    // duplicate SUBMISSION attempts."
+    //
+    // First we need the full set of this vendor's invoices, not just
+    // approved+exported — a rejected duplicate counts toward the pattern.
+    const allVendorInvoiceIds = (
+      await tx
+        .select({ id: extractedInvoices.id })
+        .from(extractedInvoices)
+        .innerJoin(
+          vendors,
+          and(
+            eq(vendors.id, vendorId),
+            or(
+              sql`normalize_vendor_text(${extractedInvoices.vendorName}) = ${vendors.normalizedName}`,
+              sql`normalize_vendor_text(${extractedInvoices.vendorName}) = ANY(${vendors.aliases})`,
+            ),
+          ),
+        )
+        .where(eq(extractedInvoices.organizationId, organizationId))
+    ).map((r) => r.id);
+
+    const dupCount =
+      allVendorInvoiceIds.length === 0
+        ? 0
+        : (
+            await tx
+              .select({
+                count: sql<number>`count(distinct ${validationResults.entityId})::int`,
+              })
+              .from(validationResults)
+              .where(
+                and(
+                  eq(validationResults.organizationId, organizationId),
+                  eq(validationResults.entityType, "extracted_invoice"),
+                  inArray(validationResults.entityId, allVendorInvoiceIds),
+                  sql`${validationResults.errorsJson} @> '[{"code":"duplicate_invoice"}]'::jsonb`,
+                ),
+              )
+          )[0].count;
 
     await tx
       .update(vendors)
@@ -188,6 +250,15 @@ export async function handleRecomputeVendorProfile(
         avgInvoiceAmount: avg.toFixed(2),
         duplicateSubmissionCount: dupCount,
         termsDriftDetected: termsDrift,
+        // PR5 — review C5: defaultPaymentTerms tracks the MODE across
+        // approved invoices, not the first-seen value. When a vendor's
+        // terms permanently change, the next recompute moves the default
+        // to the new mode and termsDrift turns off again. We only
+        // update once we have enough samples (≥3) so a single outlier
+        // doesn't flip the default.
+        ...(invoiceCount >= 3 && modeTerms !== null
+          ? { defaultPaymentTerms: modeTerms }
+          : {}),
         lastProfileUpdated: sql`now()`,
       })
       .where(eq(vendors.id, vendorId));
