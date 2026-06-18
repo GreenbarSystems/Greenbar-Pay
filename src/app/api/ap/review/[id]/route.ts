@@ -6,6 +6,15 @@
  *   - WHERE updated_at = $3 — 0 rows → 409 Conflict.
  *   - Reviewer race UI prompts a reload on 409.
  *
+ * Idempotency (addendum §4.6, PR2 review #22):
+ *   - Optional `Idempotency-Key` header — network retries of the same
+ *     PATCH return the cached response instead of producing phantom
+ *     `invoice.edited` audit rows and double-validating.
+ *   - Same key + different body → 409 idempotency_key_conflict.
+ *   - The If-Match check is OUTSIDE the idempotency layer: a retry
+ *     after a successful first call will still 409 on stale If-Match
+ *     unless the key cache catches it first.
+ *
  * After a successful UPDATE we re-run validation in the same tx so the
  * findings reflect the new values immediately.
  *
@@ -20,6 +29,7 @@ import { extractedInvoices, auditEvents } from "@/db/schema";
 import { requirePermission } from "@/lib/rbac";
 import { runValidationInTx } from "@/lib/validation/run";
 import { requireUuid } from "@/lib/route-helpers";
+import { withIdempotency } from "@/lib/review/idempotencyWrap";
 
 // Only header fields are editable from the review UI. Line items get their
 // own endpoint in a follow-up; for now they remain as the LLM extracted.
@@ -93,101 +103,101 @@ export async function PATCH(
     );
   }
 
-  const result = await withOrg(organizationId, async (tx) => {
-    // Snapshot the row first — gives us the `before` for the audit event
-    // and lets us bail early if it's already in a terminal state.
-    const [before] = await tx
-      .select()
-      .from(extractedInvoices)
-      .where(
-        and(
-          eq(extractedInvoices.id, params.id),
-          eq(extractedInvoices.organizationId, organizationId),
-        ),
-      )
-      .limit(1);
-    if (!before) return { kind: "not_found" as const };
-    if (["approved", "rejected", "exported", "superseded"].includes(before.reviewStatus)) {
-      return { kind: "terminal" as const, status: before.reviewStatus };
-    }
+  // Idempotency-Key hash covers: method, path, body, AND the If-Match
+  // value (so the same key replayed against an updated row hashes
+  // differently and isn't silently served the prior response).
+  const idempotencyBody = { patch: parsed, ifMatch };
 
-    // Compare-and-set on updated_at (§4.7).
-    const updated = await tx
-      .update(extractedInvoices)
-      .set({
-        ...parsed,
-        updatedAt: sql`now()`,
-      })
-      .where(
-        and(
-          eq(extractedInvoices.id, params.id),
-          eq(extractedInvoices.organizationId, organizationId),
-          eq(extractedInvoices.updatedAt, ifMatchDate),
-        ),
-      )
-      .returning({
-        id: extractedInvoices.id,
-        updatedAt: extractedInvoices.updatedAt,
+  return withIdempotency(
+    req,
+    organizationId,
+    `/api/ap/review/${params.id}`,
+    idempotencyBody,
+    async () => {
+      return withOrg(organizationId, async (tx) => {
+        // Snapshot the row first — gives us the `before` for the audit event
+        // and lets us bail early if it's already in a terminal state.
+        const [before] = await tx
+          .select()
+          .from(extractedInvoices)
+          .where(
+            and(
+              eq(extractedInvoices.id, params.id),
+              eq(extractedInvoices.organizationId, organizationId),
+            ),
+          )
+          .limit(1);
+        if (!before) return { status: 404, body: { error: "not_found" } };
+        if (["approved", "rejected", "exported", "superseded"].includes(before.reviewStatus)) {
+          return {
+            status: 409,
+            body: { error: "terminal_status", status: before.reviewStatus },
+          };
+        }
+
+        // Compare-and-set on updated_at (§4.7).
+        const updated = await tx
+          .update(extractedInvoices)
+          .set({
+            ...parsed,
+            updatedAt: sql`now()`,
+          })
+          .where(
+            and(
+              eq(extractedInvoices.id, params.id),
+              eq(extractedInvoices.organizationId, organizationId),
+              eq(extractedInvoices.updatedAt, ifMatchDate),
+            ),
+          )
+          .returning({
+            id: extractedInvoices.id,
+            updatedAt: extractedInvoices.updatedAt,
+          });
+
+        if (updated.length === 0) {
+          return {
+            status: 409,
+            body: {
+              error: "stale_if_match",
+              message: "Invoice was edited by someone else. Reload to see latest.",
+            },
+          };
+        }
+
+        // Re-run validation against the new field values.
+        const validation = await runValidationInTx(tx, {
+          organizationId,
+          extractedInvoiceId: params.id,
+          documentId: before.documentId,
+        });
+        await tx
+          .update(extractedInvoices)
+          .set({ reviewStatus: validation.newReviewStatus })
+          .where(eq(extractedInvoices.id, params.id));
+
+        await tx.insert(auditEvents).values({
+          organizationId,
+          actorType: "user",
+          actorId: userId,
+          action: "invoice.edited",
+          entityType: "extracted_invoice",
+          entityId: params.id,
+          beforeJson: pickHeaderFields(before),
+          afterJson: parsed,
+          metadataJson: { newReviewStatus: validation.newReviewStatus },
+        });
+
+        return {
+          status: 200,
+          body: {
+            extractedInvoiceId: params.id,
+            updatedAt: updated[0].updatedAt,
+            reviewStatus: validation.newReviewStatus,
+          },
+        };
       });
-
-    if (updated.length === 0) {
-      return { kind: "conflict" as const };
-    }
-
-    // Re-run validation against the new field values.
-    const validation = await runValidationInTx(tx, {
-      organizationId,
-      extractedInvoiceId: params.id,
-      documentId: before.documentId,
-    });
-    await tx
-      .update(extractedInvoices)
-      .set({ reviewStatus: validation.newReviewStatus })
-      .where(eq(extractedInvoices.id, params.id));
-
-    await tx.insert(auditEvents).values({
-      organizationId,
-      actorType: "user",
-      actorId: userId,
-      action: "invoice.edited",
-      entityType: "extracted_invoice",
-      entityId: params.id,
-      beforeJson: pickHeaderFields(before),
-      afterJson: parsed,
-      metadataJson: { newReviewStatus: validation.newReviewStatus },
-    });
-
-    return {
-      kind: "ok" as const,
-      updatedAt: updated[0].updatedAt,
-      newReviewStatus: validation.newReviewStatus,
-    };
-  });
-
-  if (result.kind === "not_found") {
-    return NextResponse.json({ error: "not_found" }, { status: 404 });
-  }
-  if (result.kind === "terminal") {
-    return NextResponse.json(
-      { error: "terminal_status", status: result.status },
-      { status: 409 },
-    );
-  }
-  if (result.kind === "conflict") {
-    return NextResponse.json(
-      {
-        error: "stale_if_match",
-        message: "Invoice was edited by someone else. Reload to see latest.",
-      },
-      { status: 409 },
-    );
-  }
-
-  return NextResponse.json({
-    extractedInvoiceId: params.id,
-    updatedAt: result.updatedAt,
-    reviewStatus: result.newReviewStatus,
-  });
+    },
+  );
 }
 
 /** Snapshot only the user-visible header fields for the audit `before`. */

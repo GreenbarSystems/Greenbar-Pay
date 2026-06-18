@@ -77,6 +77,26 @@ export async function POST(
           };
         }
 
+        // PR2 — separation of duties (review #2). Symmetric with approve.
+        // Reject is less obviously fraud-relevant than approve, but giving
+        // the uploader unilateral reject power lets a single actor
+        // suppress invoices they don't want to see — same SoD concern.
+        const [parentDoc] = await tx
+          .select({ id: documents.id, createdBy: documents.createdBy })
+          .from(documents)
+          .where(eq(documents.id, before.documentId))
+          .limit(1);
+        if (parentDoc?.createdBy && parentDoc.createdBy === userId) {
+          return {
+            status: 403,
+            body: {
+              error: "sod_violation",
+              message:
+                "The user who uploaded this document cannot reject it. Ask a second reviewer.",
+            },
+          };
+        }
+
         const [updated] = await tx
           .update(extractedInvoices)
           .set({
@@ -124,7 +144,12 @@ export async function POST(
             before as unknown as Record<string, unknown>,
             INVOICE_HEADER_FIELDS,
           ),
-          metadataJson: { reason: body.reason },
+          metadataJson: {
+            reason: body.reason,
+            sodChecked: true,
+            sodPassed: true,
+            uploaderId: parentDoc?.createdBy ?? null,
+          },
         });
 
         return {

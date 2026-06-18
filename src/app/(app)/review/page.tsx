@@ -36,13 +36,14 @@ export default async function ReviewListPage({
     "needs_review";
 
   const rows = await withOrg(organizationId, async (tx) => {
-    // Pull the latest validation_results errors count via a lateral subquery
-    // — append-only table, latest by created_at is the active state.
+    // Pull the active validation_results errors via a lateral subquery.
+    // PR2: append-only — filter to superseded_at IS NULL for the live row.
     const latestValidation = sql`(
       select errors_json
       from validation_results vr
       where vr.entity_type = 'extracted_invoice'
         and vr.entity_id   = ${extractedInvoices.id}
+        and vr.superseded_at is null
       order by vr.created_at desc
       limit 1
     )`;

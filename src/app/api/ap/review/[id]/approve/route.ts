@@ -23,7 +23,7 @@
  * someone clicked approve.
  */
 import { NextResponse } from "next/server";
-import { and, desc, eq, inArray, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { auth } from "@/lib/auth";
 import { withOrg } from "@/db/client";
 import {
@@ -64,9 +64,12 @@ export async function POST(
     {},
     async () => {
       return withOrg(organizationId, async (tx) => {
-        // Block approval until a validation row EXISTS (closes the race
-        // window between extract-invoice-data and validate-extracted-invoice)
-        // AND, if it exists, has no blocking findings.
+        // Block approval until an ACTIVE validation row EXISTS (closes the
+        // race window between extract-invoice-data and validate-extracted-
+        // invoice) AND, if it exists, has no blocking findings.
+        //
+        // PR2: validation_results is append-only — `WHERE superseded_at
+        // IS NULL` selects the current row, prior runs are preserved.
         const [latest] = await tx
           .select()
           .from(validationResults)
@@ -74,6 +77,7 @@ export async function POST(
             and(
               eq(validationResults.entityType, "extracted_invoice"),
               eq(validationResults.entityId, params.id),
+              isNull(validationResults.supersededAt),
             ),
           )
           .orderBy(desc(validationResults.createdAt))
@@ -115,6 +119,28 @@ export async function POST(
           return {
             status: 404,
             body: { error: "not_found" },
+          };
+        }
+
+        // PR2 — separation of duties (review #2):
+        // The user who uploaded the source document cannot also approve
+        // the resulting invoice. This is the single highest-risk gap the
+        // adversarial review flagged. Maker-checker enforced at the
+        // service layer because the RBAC role does not differentiate
+        // upload vs approve (both `reviewer` permissions).
+        const [parentDoc] = await tx
+          .select({ id: documents.id, createdBy: documents.createdBy })
+          .from(documents)
+          .where(eq(documents.id, before.documentId))
+          .limit(1);
+        if (parentDoc?.createdBy && parentDoc.createdBy === userId) {
+          return {
+            status: 403,
+            body: {
+              error: "sod_violation",
+              message:
+                "The user who uploaded this document cannot approve it. Ask a second reviewer.",
+            },
           };
         }
 
@@ -172,6 +198,11 @@ export async function POST(
             findingCount: Array.isArray(latest.errorsJson)
               ? (latest.errorsJson as unknown[]).length
               : 0,
+            // SoD check outcome — recorded so audit can prove the
+            // separation-of-duties guard ran and passed.
+            sodChecked: true,
+            sodPassed: true,
+            uploaderId: parentDoc?.createdBy ?? null,
           },
         });
 
