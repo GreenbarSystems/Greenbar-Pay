@@ -70,7 +70,21 @@ interface Props {
   vendorMatch: {
     confidence: string;
     score: Numeric;
+    method: string | null;
     candidates: Array<{ id: string; name: string; score: number }>;
+  } | null;
+  /** Phase 7 — D1: full longitudinal profile snapshot when a vendor is matched. */
+  vendorProfile: {
+    id: string;
+    name: string;
+    invoiceCount: number;
+    spend30d: Numeric;
+    spend90d: Numeric;
+    avgInvoiceAmount: Numeric;
+    defaultPaymentTerms: string | null;
+    termsDriftDetected: boolean;
+    duplicateSubmissionCount: number;
+    lastInvoiceDate: string | null;
   } | null;
   audits: Audit[];
 }
@@ -339,17 +353,86 @@ export default function ReviewDetailClient(props: Props) {
           )}
         </div>
 
-        {/* ── Vendor match ────────────────────────────────────────── */}
-        {props.vendorMatch && (
+        {/* ── Vendor snapshot (Phase 7 — D1) ──────────────────────── */}
+        {props.vendorProfile ? (
           <div className="rounded-md border border-gray-200 bg-white p-4">
-            <h2 className="mb-2 text-sm font-medium text-gray-700">Vendor match</h2>
+            <div className="mb-2 flex items-center justify-between">
+              <h2 className="text-sm font-medium text-gray-700">Vendor snapshot</h2>
+              <a
+                href={`/vendors/${props.vendorProfile.id}`}
+                className="text-xs text-gray-600 underline hover:text-gray-900"
+              >
+                Full profile →
+              </a>
+            </div>
+            <p className="mb-2 text-sm font-medium text-gray-900">
+              {props.vendorProfile.name}
+            </p>
+
+            {/* The spec's "3 data points": spend run-rate, duplicate
+                history, terms status. */}
+            <dl className="grid grid-cols-3 gap-3 text-xs">
+              <div>
+                <dt className="text-gray-500">30d spend</dt>
+                <dd className="mt-0.5 font-mono text-gray-900">
+                  {props.vendorProfile.invoiceCount >= 3
+                    ? props.vendorProfile.spend30d
+                    : "—"}
+                </dd>
+              </div>
+              <div>
+                <dt className="text-gray-500">Duplicates</dt>
+                <dd className="mt-0.5 font-mono text-gray-900">
+                  {props.vendorProfile.duplicateSubmissionCount}
+                </dd>
+              </div>
+              <div>
+                <dt className="text-gray-500">Terms</dt>
+                <dd className="mt-0.5 text-gray-900">
+                  {props.vendorProfile.defaultPaymentTerms ?? "—"}
+                  {props.vendorProfile.termsDriftDetected && (
+                    <span className="ml-1 rounded bg-amber-100 px-1 py-0.5 text-[10px] font-medium text-amber-800">
+                      drift
+                    </span>
+                  )}
+                </dd>
+              </div>
+            </dl>
+
+            <div className="mt-3 border-t border-gray-100 pt-2 text-xs text-gray-600">
+              <div>
+                {props.vendorProfile.invoiceCount} invoice
+                {props.vendorProfile.invoiceCount === 1 ? "" : "s"} on file
+                {props.vendorProfile.lastInvoiceDate &&
+                  ` · last ${props.vendorProfile.lastInvoiceDate}`}
+              </div>
+              {props.vendorMatch?.method && (
+                <div className="mt-0.5 text-gray-500">
+                  Match: <span className="font-mono">{props.vendorMatch.method}</span>
+                  {props.vendorMatch.score && (
+                    <>
+                      {" · "}
+                      <span className="font-mono">{props.vendorMatch.score}</span>
+                    </>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+        ) : props.vendorMatch ? (
+          // Unmatched / low-confidence — show candidates so the reviewer
+          // can decide. Same shape as Phase 4 but explicitly labeled.
+          <div className="rounded-md border border-gray-200 bg-white p-4">
+            <h2 className="mb-2 text-sm font-medium text-gray-700">
+              Vendor — no profile yet
+            </h2>
             <p className="text-xs text-gray-700">
               Confidence:{" "}
               <span className="font-medium">{props.vendorMatch.confidence}</span>
-              {props.vendorMatch.score && (
+              {props.vendorMatch.method && (
                 <>
-                  {" · score="}
-                  <span className="font-mono">{props.vendorMatch.score}</span>
+                  {" · method="}
+                  <span className="font-mono">{props.vendorMatch.method}</span>
                 </>
               )}
             </p>
@@ -362,8 +445,11 @@ export default function ReviewDetailClient(props: Props) {
                 ))}
               </ul>
             )}
+            <p className="mt-2 text-xs text-gray-500">
+              A vendor record will be created automatically on approval.
+            </p>
           </div>
-        )}
+        ) : null}
 
         {/* ── Audit ──────────────────────────────────────────────── */}
         <details className="rounded-md border border-gray-200 bg-white p-4">

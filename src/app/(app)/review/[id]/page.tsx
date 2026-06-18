@@ -7,6 +7,7 @@ import {
   extractedInvoiceLines,
   validationResults,
   vendorMatches,
+  vendors,
   auditEvents,
 } from "@/db/schema";
 import { and, desc, eq, isNull } from "drizzle-orm";
@@ -69,6 +70,17 @@ export default async function ReviewDetailPage({
       .orderBy(desc(vendorMatches.createdAt))
       .limit(1);
 
+    // Phase 7 — D1: pull the vendor profile snapshot for the side card.
+    let vendorProfile: typeof vendors.$inferSelect | null = null;
+    if (latestVendorMatch?.vendorId) {
+      const [v] = await tx
+        .select()
+        .from(vendors)
+        .where(eq(vendors.id, latestVendorMatch.vendorId))
+        .limit(1);
+      vendorProfile = v ?? null;
+    }
+
     const audits = await tx
       .select()
       .from(auditEvents)
@@ -81,7 +93,15 @@ export default async function ReviewDetailPage({
       .orderBy(desc(auditEvents.createdAt))
       .limit(20);
 
-    return { invoice, doc, lines, latestValidation, latestVendorMatch, audits };
+    return {
+      invoice,
+      doc,
+      lines,
+      latestValidation,
+      latestVendorMatch,
+      vendorProfile,
+      audits,
+    };
   });
 
   if (!data || !data.doc) notFound();
@@ -113,6 +133,7 @@ export default async function ReviewDetailPage({
           ? {
               confidence: data.latestVendorMatch.matchConfidence,
               score: data.latestVendorMatch.matchScore,
+              method: data.latestVendorMatch.matchMethod,
               candidates: Array.isArray(data.latestVendorMatch.candidatesJson)
                 ? (data.latestVendorMatch.candidatesJson as Array<{
                     id: string;
@@ -120,6 +141,22 @@ export default async function ReviewDetailPage({
                     score: number;
                   }>)
                 : [],
+            }
+          : null
+      }
+      vendorProfile={
+        data.vendorProfile
+          ? {
+              id: data.vendorProfile.id,
+              name: data.vendorProfile.name,
+              invoiceCount: data.vendorProfile.invoiceCount,
+              spend30d: data.vendorProfile.spend30d,
+              spend90d: data.vendorProfile.spend90d,
+              avgInvoiceAmount: data.vendorProfile.avgInvoiceAmount,
+              defaultPaymentTerms: data.vendorProfile.defaultPaymentTerms,
+              termsDriftDetected: data.vendorProfile.termsDriftDetected,
+              duplicateSubmissionCount: data.vendorProfile.duplicateSubmissionCount,
+              lastInvoiceDate: data.vendorProfile.lastInvoiceDate,
             }
           : null
       }

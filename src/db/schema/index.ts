@@ -7,6 +7,7 @@ export * from "./documentExtractions";
 export * from "./llmRuns";
 export * from "./extractedInvoices";
 export * from "./vendors";
+// vendorPricingHistory is exported via ./vendors
 export * from "./validationResults";
 export * from "./exports";
 export * from "./emailMessages";

@@ -1,9 +1,13 @@
 /**
- * Vendor matching — Phase 4 ships the simple-but-honest version:
- *   normalize → exact match → top candidate by Jaccard token overlap.
+ * Vendor matching. Phase 7 — D1 from the updated MVP spec:
  *
- * Returns the best vendor + confidence + score, or null if no candidates.
- * Fuzzy match via Postgres pg_trgm is a later upgrade; this stays pure.
+ *   normalize → exact on normalized_name OR any alias → top Jaccard candidate.
+ *
+ * The alias check resolves entity variations ("ABC Supplies" ↔
+ * "A.B.C. Supplies LLC") immediately as `exact_alias` instead of relying
+ * on Jaccard. Aliases are populated by the approve handler when a
+ * fuzzy match resolves with reviewer confirmation, so the second
+ * occurrence of any variant is a guaranteed exact match.
  */
 import { normalizeVendor } from ".";
 
@@ -11,12 +15,17 @@ export interface VendorCandidate {
   id: string;
   name: string;
   normalizedName: string;
+  /** Normalized variant spellings the matcher has seen previously. */
+  aliases?: string[];
 }
+
+export type MatchMethod = "exact_normalized" | "exact_alias" | "jaccard" | "none";
 
 export interface VendorMatchResult {
   vendorId: string | null;
   confidence: "low" | "medium" | "high";
   score: number;
+  method: MatchMethod;
   candidates: Array<{ id: string; name: string; score: number }>;
 }
 
@@ -25,31 +34,45 @@ export function matchVendor(
   candidates: VendorCandidate[],
 ): VendorMatchResult {
   if (!extractedName || candidates.length === 0) {
-    return { vendorId: null, confidence: "low", score: 0, candidates: [] };
+    return {
+      vendorId: null,
+      confidence: "low",
+      score: 0,
+      method: "none",
+      candidates: [],
+    };
   }
 
   const target = normalizeVendor(extractedName);
   const targetTokens = new Set(target.split(" ").filter(Boolean));
 
-  // Exact normalized match short-circuits.
+  // 1. Exact on canonical normalized_name.
   const exact = candidates.find((c) => c.normalizedName === target);
   if (exact) {
     return {
       vendorId: exact.id,
       confidence: "high",
       score: 1,
+      method: "exact_normalized",
       candidates: [{ id: exact.id, name: exact.name, score: 1 }],
     };
   }
 
-  // Jaccard overlap on tokens. Cheap, no deps.
-  //
-  // PR4 — review #27: the original `[...targetTokens].filter(...).length`
-  // allocated a fresh array AND a union Set on every candidate iteration.
-  // For a CPA firm with 10,000 vendors that's 20,000 allocations and a
-  // throwaway Set per call. The shape below uses an in-place counter
-  // and computes |union| = |a| + |b| - |intersection| arithmetically
-  // — zero allocations inside the inner loop.
+  // 2. Exact on any alias (already normalized when stored).
+  const aliasHit = candidates.find((c) =>
+    (c.aliases ?? []).some((a) => a === target),
+  );
+  if (aliasHit) {
+    return {
+      vendorId: aliasHit.id,
+      confidence: "high",
+      score: 1,
+      method: "exact_alias",
+      candidates: [{ id: aliasHit.id, name: aliasHit.name, score: 1 }],
+    };
+  }
+
+  // 3. Jaccard token overlap (in-place counter — PR4 review #27).
   const targetSize = targetTokens.size;
   const scored = candidates
     .map((c) => {
@@ -73,6 +96,7 @@ export function matchVendor(
     vendorId: confidence === "low" ? null : best.id,
     confidence,
     score: round4(best.score),
+    method: "jaccard",
     candidates: scored,
   };
 }
