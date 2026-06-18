@@ -41,6 +41,7 @@ import {
 } from "@/lib/route-helpers";
 import { bootstrapVendorOnApprove } from "@/lib/vendors/bootstrap";
 import { getQueue, JOB } from "@/lib/queue";
+import { scrubError } from "@/lib/llm/scrub";
 
 export async function POST(
   req: Request,
@@ -254,18 +255,30 @@ export async function POST(
       });
 
       // Phase 7 — D1: kick the profile recompute job once the approve
-      // committed. The job is idempotent on vendorId — a duplicate
-      // delivery just re-aggregates and writes the same numbers.
+      // committed. PR5 — review C3: wrap in try/catch so a transient
+      // pg-boss outage doesn't bleed back into the response (idempotency
+      // cache wouldn't be written, retries would 409 since status is now
+      // `approved`). The recompute job is idempotent and the next approve
+      // for any vendor will pick up a missed run, so a swallowed enqueue
+      // failure is recoverable. Failure is scrubbed-and-logged so an
+      // operator can spot a pattern.
       if (
         "enqueueRecompute" in txResult &&
         typeof txResult.enqueueRecompute === "string"
       ) {
-        const boss = await getQueue();
-        await boss.send(
-          JOB.recomputeVendorProfile,
-          { vendorId: txResult.enqueueRecompute, organizationId },
-          { singletonKey: `recompute-vendor-profile:${txResult.enqueueRecompute}` },
-        );
+        try {
+          const boss = await getQueue();
+          await boss.send(
+            JOB.recomputeVendorProfile,
+            { vendorId: txResult.enqueueRecompute, organizationId },
+            { singletonKey: `recompute-vendor-profile:${txResult.enqueueRecompute}` },
+          );
+        } catch (err) {
+          console.warn(
+            `[approve] recompute-vendor-profile enqueue failed for vendor=${txResult.enqueueRecompute}; approve committed, profile will refresh on next approve`,
+            scrubError(err),
+          );
+        }
       }
 
       return { status: txResult.status, body: txResult.body };
