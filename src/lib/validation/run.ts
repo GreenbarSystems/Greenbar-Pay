@@ -215,6 +215,44 @@ export async function runValidationInTx(
       after: Record<string, unknown>;
     }> = [];
 
+    // PR18 C4 — batch the per-line confidence writes into one CASE
+    // UPDATE. The prior loop issued one round trip per line inside
+    // the user-facing validation tx (PATCH path), so a 30-line
+    // invoice serialized 30 RTs (~300ms felt latency on a managed
+    // DB). The CASE form collapses to one round trip while preserving
+    // the per-line UPDATE semantics.
+    //
+    // Build CASE expressions inline. Per-value bindings go through the
+    // sql tag — only the static column name and CASE keyword reach
+    // sql.raw, both of which are hard-coded literals.
+    const caseExpr = (
+      column: string,
+      pick: (u: PersistLineUpdate) => unknown,
+    ) => {
+      const chunks = lineScores.persistUpdates.map(
+        (u) => sql`WHEN ${u.lineId}::uuid THEN ${pick(u)}`,
+      );
+      return sql.join(
+        [sql.raw(`CASE ${column}`), ...chunks, sql.raw("END")],
+        sql.raw(" "),
+      );
+    };
+
+    await tx
+      .update(extractedInvoiceLines)
+      .set({
+        confidenceScore: caseExpr("id", (u) => u.score),
+        confidenceReason: caseExpr("id", (u) => u.reason),
+        histSampleCount: caseExpr("id", (u) => u.histSampleCount),
+        histAvgPrice: caseExpr("id", (u) => u.histAvgPrice),
+        histStddevPrice: caseExpr("id", (u) => u.histStddevPrice),
+        stddevDistance: caseExpr("id", (u) => u.stddevDistance),
+        updatedAt: sql`now()`,
+      })
+      .where(inArray(extractedInvoiceLines.id, lineIds));
+
+    // Then derive the changed snapshots from priorById + persistUpdates
+    // for the audit event. No DB I/O — pure JS.
     for (const u of lineScores.persistUpdates) {
       const prior = priorById.get(u.lineId);
       const after = {
@@ -232,11 +270,6 @@ export async function runValidationInTx(
         prior.histAvgPrice !== after.histAvgPrice ||
         prior.histStddevPrice !== after.histStddevPrice ||
         prior.stddevDistance !== after.stddevDistance;
-
-      await tx
-        .update(extractedInvoiceLines)
-        .set({ ...after, updatedAt: sql`now()` })
-        .where(eq(extractedInvoiceLines.id, u.lineId));
 
       if (changed && prior) {
         changedSnapshots.push({

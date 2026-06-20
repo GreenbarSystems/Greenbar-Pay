@@ -9,9 +9,12 @@ export const auditEvents = pgTable(
   "audit_events",
   {
     id: uuid("id").primaryKey().defaultRandom(),
+    // PR18 — append-only RULES + RESTRICT on org cascade. The system
+    // of record for every other control must not silently disappear
+    // when an organisation is deleted. RULES added in migration 0019.
     organizationId: uuid("organization_id")
       .notNull()
-      .references(() => organizations.id, { onDelete: "cascade" }),
+      .references(() => organizations.id, { onDelete: "restrict" }),
     actorType: text("actor_type").notNull(), // 'user' | 'worker' | 'admin' | 'system'
     actorId: uuid("actor_id"),
     action: text("action").notNull(),
