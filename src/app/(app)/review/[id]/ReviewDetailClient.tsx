@@ -104,6 +104,14 @@ interface Props {
     riskScore: number;
     riskJustification: string;
     generatedAt: string;
+    /** Phase 10 — D5: deterministic coaching prompts. */
+    id: string;
+    coachingPrompts: Array<{
+      code: string;
+      severity: "info" | "warning" | "critical";
+      message: string;
+      dollarImpact?: number | null;
+    }>;
   } | null;
   audits: Audit[];
 }
@@ -395,6 +403,17 @@ export default function ReviewDetailClient(props: Props) {
           </div>
         )}
 
+        {/* Phase 10 — D5: Pre-Approval Coaching. Rendered when the
+            briefing produced any prompts; absent otherwise (no need to
+            draw an empty panel). */}
+        {props.briefingCard && props.briefingCard.coachingPrompts.length > 0 && (
+          <CoachingPanel
+            invoiceId={props.invoice.id}
+            briefingCardId={props.briefingCard.id}
+            prompts={props.briefingCard.coachingPrompts}
+          />
+        )}
+
         {/* ── Vendor snapshot (Phase 7 — D1) ──────────────────────── */}
         {props.vendorProfile ? (
           <div className="rounded-md border border-gray-200 bg-white p-4">
@@ -679,5 +698,111 @@ function LineConfidenceChip({
     >
       {score}
     </span>
+  );
+}
+
+/**
+ * Phase 10 — D5: Pre-Approval Coaching panel.
+ *
+ * Renders the deterministic coaching prompts the briefing job stored
+ * on this card. Each prompt is dismissible — dismissal is session-only
+ * at the UI layer (refresh restores them) but logs a coaching.prompt_
+ * dismissed audit event so the compliance trail records every prompt
+ * the approver chose to ignore.
+ *
+ * F03 — Behavioural nudges: messages are loss-framed by the compute
+ * function. We don't reformat them here; the panel is a thin renderer.
+ */
+function CoachingPanel({
+  invoiceId,
+  briefingCardId,
+  prompts,
+}: {
+  invoiceId: string;
+  briefingCardId: string;
+  prompts: Array<{
+    code: string;
+    severity: "info" | "warning" | "critical";
+    message: string;
+    dollarImpact?: number | null;
+  }>;
+}) {
+  const [dismissed, setDismissed] = useState<Set<string>>(new Set());
+  const visible = prompts.filter((p) => !dismissed.has(p.code));
+
+  async function dismiss(code: string) {
+    // Optimistic — never block the UI on the audit log write.
+    setDismissed((prev) => {
+      const next = new Set(prev);
+      next.add(code);
+      return next;
+    });
+    try {
+      await fetch(`/api/ap/review/${invoiceId}/coaching/dismiss`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ promptCode: code, briefingCardId }),
+      });
+    } catch {
+      // If the audit write fails, we still hide the prompt for the
+      // session — the user has clearly indicated they don't want to
+      // see it. The compliance gap (no log entry) is preferable to a
+      // sticky prompt the reviewer can't dismiss.
+    }
+  }
+
+  if (visible.length === 0) {
+    return (
+      <div className="rounded-md border border-dashed border-gray-200 bg-white p-3 text-xs text-gray-400">
+        Coaching prompts dismissed.
+      </div>
+    );
+  }
+
+  return (
+    <div className="rounded-md border border-gray-200 bg-white p-4">
+      <div className="mb-2 flex items-center justify-between">
+        <h2 className="text-sm font-medium text-gray-700">Coaching</h2>
+        <span className="text-[10px] uppercase tracking-wide text-gray-400">
+          {visible.length} prompt{visible.length === 1 ? "" : "s"}
+        </span>
+      </div>
+      <ul className="space-y-2">
+        {visible.map((p) => {
+          const severityClass = {
+            info: "border-l-2 border-sky-400 bg-sky-50",
+            warning: "border-l-2 border-amber-400 bg-amber-50",
+            critical: "border-l-2 border-red-400 bg-red-50",
+          }[p.severity];
+          return (
+            <li
+              key={p.code}
+              className={`flex items-start justify-between gap-2 rounded p-2 text-xs ${severityClass}`}
+            >
+              <div className="flex-1">
+                <p className="leading-snug text-gray-900">{p.message}</p>
+                {typeof p.dollarImpact === "number" && (
+                  <p className="mt-0.5 text-[11px] text-gray-600">
+                    Estimated impact:{" "}
+                    <span className="font-mono">
+                      {p.dollarImpact >= 0 ? "+" : "−"}$
+                      {Math.abs(p.dollarImpact).toFixed(2)}
+                    </span>
+                  </p>
+                )}
+              </div>
+              <button
+                type="button"
+                onClick={() => dismiss(p.code)}
+                className="shrink-0 rounded px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-gray-500 hover:bg-gray-200 hover:text-gray-800"
+                aria-label={`Dismiss ${p.code}`}
+              >
+                Dismiss
+              </button>
+            </li>
+          );
+        })}
+      </ul>
+    </div>
   );
 }

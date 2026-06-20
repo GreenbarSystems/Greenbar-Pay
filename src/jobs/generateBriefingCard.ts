@@ -48,6 +48,8 @@ import {
   RISK_SCORE_VERSION,
   riskBand,
 } from "@/lib/briefing/risk-score";
+import { computeCoachingPrompts } from "@/lib/coaching/compute";
+import type { ValidationFinding } from "@/lib/validation";
 import { dispatchBriefingCardGeneration } from "@/lib/llm";
 import { scrubError } from "@/lib/llm/scrub";
 import type { JobPayloads } from "@/lib/queue";
@@ -237,7 +239,11 @@ export async function handleGenerateBriefingCard(
     return {
       invoice,
       lines,
+      // findings = context-stripped, prompt-safe (PR11 C5)
       findings: findingsRaw,
+      // findingsFull = sanctioned shape with context — coaching uses
+      // this. NEVER reaches the LLM dispatch path.
+      findingsFull: rawErrors,
       vendorProfile,
       priorInvoice,
       priorLines,
@@ -388,6 +394,37 @@ export async function handleGenerateBriefingCard(
       );
 
     const r = outcome.result;
+    // Phase 10 — D5: deterministic coaching prompts. Computed inside
+    // the same tx as the briefing insert so the row reflects a
+    // consistent view of the prep snapshot. The full findings array
+    // (including `context`) is the right input here — coaching is a
+    // DB-only feature, never crosses the Anthropic boundary.
+    const coachingPrompts = computeCoachingPrompts({
+      invoice: {
+        total: numericOrNull(prep.invoice.total),
+        currency: prep.invoice.currency,
+        paymentTerms: prep.invoice.paymentTerms,
+        invoiceDate: prep.invoice.invoiceDate,
+        dueDate: prep.invoice.dueDate,
+        // Extraction doesn't separate discount % from amount today;
+        // the discount column carries either form per the prompt's
+        // free-text interpretation. Leave the explicit early-payment
+        // discount coaching trigger inert until the extraction schema
+        // grows a typed discount_pct field.
+        discountPct: null,
+        discountAmount: numericOrNull(prep.invoice.discount),
+      },
+      vendorProfile: prep.vendorProfile
+        ? {
+            invoiceCount: prep.vendorProfile.invoiceCount,
+            spend30d: prep.vendorProfile.spend30d,
+            avgInvoiceAmount: prep.vendorProfile.avgInvoiceAmount,
+            defaultPaymentTerms: prep.vendorProfile.defaultPaymentTerms,
+          }
+        : null,
+      findings: prep.findingsFull as unknown as ValidationFinding[],
+    });
+
     await tx.insert(briefingCards).values({
       organizationId,
       extractedInvoiceId,
@@ -402,6 +439,8 @@ export async function handleGenerateBriefingCard(
       riskScoreVersion: RISK_SCORE_VERSION,
       vendorContextJson: prep.vendorProfile,
       riskFactorsJson: prep.risk.factors,
+      // Phase 10 — D5
+      coachingPromptsJson: coachingPrompts,
     });
 
     // PR12 M10 — record band + strongest factor on briefing.generated
@@ -425,6 +464,9 @@ export async function handleGenerateBriefingCard(
         dominantFactor,
         anomalyFlagCount: r.anomalyFlags.length,
         glCode: r.glCode,
+        // Phase 10 — D5: lets audit queries count coaching coverage
+        // without joining briefing_cards.
+        coachingPromptCount: coachingPrompts.length,
       },
     });
 
