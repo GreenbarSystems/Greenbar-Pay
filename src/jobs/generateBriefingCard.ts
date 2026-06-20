@@ -189,6 +189,17 @@ export async function handleGenerateBriefingCard(
       }
     }
 
+    // Phase 9 — D3 + F06: pull rate-drift count + new-line-item flag
+    // straight from the active findings list. These were emitted by the
+    // validator into validation_results.errors_json — single source of
+    // truth, no separate query needed.
+    const rateDriftCount = findingsRaw.filter(
+      (f) => f.code === "unit_price_drift",
+    ).length;
+    const hasNewLineItem = findingsRaw.some(
+      (f) => f.code === "new_line_item",
+    );
+
     const risk = computeRiskScore({
       blockingFindingCount,
       warningFindingCount,
@@ -196,6 +207,8 @@ export async function handleGenerateBriefingCard(
       vendorDuplicateCount: vendorProfile?.duplicateSubmissionCount ?? 0,
       textQualityLow,
       vendorWarmingUp: (vendorProfile?.invoiceCount ?? 0) < 3,
+      rateDriftCount,
+      hasNewLineItem,
     });
 
     return {

@@ -126,6 +126,18 @@ export const vendorPricingHistory = pgTable(
     /** Sample count contributing to this row. */
     samples: integer("samples").notNull(),
     lastSeenAt: timestamp("last_seen_at", { withTimezone: true }).notNull(),
+    /**
+     * Phase 9 — D3 stats added so the rate-drift validator can score
+     * deviations in standard deviations rather than raw %. NULL on rows
+     * predating Phase 9 — the validator treats NULL stddev as
+     * "insufficient data, no drift finding."
+     */
+    stddevUnitPrice: numeric("stddev_unit_price", { precision: 14, scale: 4 }),
+    minUnitPrice: numeric("min_unit_price", { precision: 14, scale: 4 }),
+    maxUnitPrice: numeric("max_unit_price", { precision: 14, scale: 4 }),
+    lastUnitPrice: numeric("last_unit_price", { precision: 14, scale: 4 }),
+    /** Phase 9 — 'stable' | 'rising' | 'falling' | 'insufficient_data'. NULL on legacy rows. */
+    priceTrend: text("price_trend"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     /** NULL = active. Set by recompute when a fresh aggregate replaces this row. */
     supersededAt: timestamp("superseded_at", { withTimezone: true }),

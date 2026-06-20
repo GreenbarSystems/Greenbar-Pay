@@ -26,7 +26,10 @@ export type FindingCode =
   | "missing_line_items"
   | "math_mismatch"
   | "low_vendor_match"
-  | "low_text_quality";
+  | "low_text_quality"
+  // Phase 9 — D3 (Contract Validation)
+  | "unit_price_drift"
+  | "new_line_item";
 
 export interface ValidationFinding {
   code: FindingCode;
@@ -68,6 +71,24 @@ export interface ValidationInputs {
   } | null;
   /** Latest document_extractions.text_length for the underlying doc. */
   textLength: number | null;
+  /**
+   * Phase 9 — D3 + F06. Per-line scoring inputs. Each entry pairs a
+   * line index with the score result returned by scoreLine() and the
+   * optional drift signal. Empty array when no vendor matched or when
+   * the caller doesn't run line scoring (e.g. PATCH revalidate with no
+   * line changes). Findings emitted for items flagged `new` or
+   * `unit_price_drift`; the per-line confidence itself is persisted to
+   * extracted_invoice_lines by the caller, not surfaced here.
+   */
+  lineScores?: Array<{
+    lineNumber: number;
+    keyword: string | null;
+    score: "high" | "medium" | "low" | "new";
+    rateDrift: boolean;
+    unitPrice: number;
+    historyAvg: number | null;
+    stddevDistance: number | null;
+  }>;
 }
 
 export function validateInvoice(inputs: ValidationInputs): ValidationFinding[] {
@@ -188,6 +209,53 @@ export function validateInvoice(inputs: ValidationInputs): ValidationFinding[] {
       severity: "warning",
       message: `OCR/native text length ${inputs.textLength} is below ${LOW_TEXT_LENGTH}`,
     });
+  }
+
+  // ── Phase 9 — D3 Contract Validation rules ────────────────────────
+  // Emit at most one `new_line_item` warning summarising all new keywords
+  // (per-line spam helps no one), and one `unit_price_drift` warning per
+  // drifting line so reviewers can map directly back to the row.
+  if (inputs.lineScores && inputs.lineScores.length > 0) {
+    const newItems = inputs.lineScores.filter((s) => s.score === "new");
+    if (newItems.length > 0) {
+      const summary =
+        newItems.length === 1
+          ? `Line ${newItems[0].lineNumber}${newItems[0].keyword ? ` ("${newItems[0].keyword}")` : ""} not seen before from this vendor.`
+          : `${newItems.length} line items not seen before from this vendor (lines ${newItems.map((s) => s.lineNumber).join(", ")}).`;
+      findings.push({
+        code: "new_line_item",
+        severity: "warning",
+        message: summary,
+        context: {
+          lineNumbers: newItems.map((s) => s.lineNumber),
+          keywords: newItems.map((s) => s.keyword).filter(Boolean),
+        },
+      });
+    }
+
+    for (const s of inputs.lineScores) {
+      if (!s.rateDrift) continue;
+      const pct =
+        s.historyAvg && s.historyAvg !== 0
+          ? Math.round(((s.unitPrice - s.historyAvg) / s.historyAvg) * 1000) / 10
+          : null;
+      findings.push({
+        code: "unit_price_drift",
+        severity: "warning",
+        message:
+          pct === null
+            ? `Line ${s.lineNumber} unit price differs materially from prior history.`
+            : `Line ${s.lineNumber} unit price $${s.unitPrice.toFixed(2)} is ${pct > 0 ? "+" : ""}${pct.toFixed(1)}% vs historical avg.`,
+        context: {
+          lineNumber: s.lineNumber,
+          keyword: s.keyword,
+          unitPrice: s.unitPrice,
+          historyAvg: s.historyAvg,
+          stddevDistance: s.stddevDistance,
+          variancePct: pct,
+        },
+      });
+    }
   }
 
   return findings;

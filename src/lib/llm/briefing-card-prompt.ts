@@ -21,7 +21,7 @@ import { BRIEFING_TOOL_JSON_SCHEMA } from "./briefing-card-schema";
 import type { BuiltPrompt } from "./prompt";
 
 export const BRIEFING_PROMPT_NAME = "briefing-card";
-export const BRIEFING_PROMPT_VERSION = "2026-06-17";
+export const BRIEFING_PROMPT_VERSION = "2026-06-20";
 
 export const BRIEFING_SYSTEM_PROMPT = `You generate an approver-facing Briefing Card for an accounts-payable invoice.
 
@@ -39,14 +39,29 @@ Output the emit_briefing tool exactly once with:
   Use null only when you cannot make a defensible suggestion.
 - glRationale: one short paragraph (≤ 500 chars). Reference the vendor's
   history, dominant line keyword, or default code. Never invent data.
-- anomalyFlags: an array of {code, severity, message} objects. Translate
-  each structured validation finding into a one-sentence approver-facing
-  message. Add vendor-signal flags (terms_drift, duplicate_pattern,
-  spend_run_rate) when present in the vendor profile. Severity mapping:
+- anomalyFlags: an array of {code, severity, message, evidenceChain}
+  objects. Translate each structured validation finding into a
+  one-sentence approver-facing message. Add vendor-signal flags
+  (terms_drift, duplicate_pattern, spend_run_rate, rate_drift,
+  new_line_item) when present in the inputs. Severity mapping:
     info     — informational, no action expected
     warning  — review recommended; approver can still approve
     critical — should NOT be approved without resolving
   Mirror "blocking" validation severity → critical; "warning" → warning.
+  Phase 9 — F07: EVERY anomaly flag MUST include an evidenceChain array
+  of 2–6 labelled steps showing the reasoning the approver can audit.
+  Canonical labels in order (omit any that don't apply):
+    "Evidence"        — the historical data supporting the flag
+                        (n invoices, avg price, date range)
+    "This invoice"    — the specific extracted value that triggered it
+    "Trend signal"    — what direction the vendor's prior data was
+                        moving (stable / rising / falling)
+    "Contract reference" — cite contract_rate when present in inputs
+    "Stddev distance" — only when stats include stddev; quote σ
+    "Recommendation"  — one sentence: what the approver should do next
+  Each detail must use specific numbers (e.g. "Last 8 invoices averaged
+  $245.00"), not generalisations. The PII rules above still apply —
+  never quote the vendor name or invoice number in chain details.
 - deltaSummary: ≤ 500 chars. What changed vs the prior invoice
   (amount, terms, line items, due date). Empty string if no prior
   invoice was supplied.

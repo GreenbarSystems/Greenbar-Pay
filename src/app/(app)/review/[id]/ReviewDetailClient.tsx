@@ -45,6 +45,9 @@ interface LineShape {
   quantity: Numeric;
   unitPrice: Numeric;
   amount: Numeric;
+  /** Phase 9 — F06 line-item confidence. Null when never scored. */
+  confidenceScore: "high" | "medium" | "low" | "new" | null;
+  confidenceReason: string | null;
 }
 
 interface Finding {
@@ -94,6 +97,8 @@ interface Props {
       code: string;
       severity: "info" | "warning" | "critical";
       message: string;
+      /** Phase 9 — F07: optional labelled evidence chain per anomaly. */
+      evidenceChain?: Array<{ label: string; detail: string }>;
     }>;
     deltaSummary: string;
     riskScore: number;
@@ -353,6 +358,7 @@ export default function ReviewDetailClient(props: Props) {
                   <th className="text-right">Qty</th>
                   <th className="text-right">Unit</th>
                   <th className="text-right">Amount</th>
+                  <th className="text-left">Confidence</th>
                 </tr>
               </thead>
               <tbody>
@@ -363,6 +369,12 @@ export default function ReviewDetailClient(props: Props) {
                     <td className="py-1 text-right font-mono">{l.quantity ?? ""}</td>
                     <td className="py-1 text-right font-mono">{l.unitPrice ?? ""}</td>
                     <td className="py-1 text-right font-mono">{l.amount ?? ""}</td>
+                    <td className="py-1">
+                      <LineConfidenceChip
+                        score={l.confidenceScore}
+                        reason={l.confidenceReason}
+                      />
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -571,23 +583,9 @@ function BriefingCardPanel({
           <p className="text-xs text-gray-500">None.</p>
         ) : (
           <ul className="space-y-1">
-            {card.anomalyFlags.map((f, i) => {
-              const severityClass = {
-                info: "bg-gray-100 text-gray-800",
-                warning: "bg-amber-100 text-amber-800",
-                critical: "bg-red-100 text-red-800",
-              }[f.severity];
-              return (
-                <li key={i} className="text-xs leading-snug">
-                  <span
-                    className={`mr-1 inline-block rounded px-1.5 py-0.5 text-[10px] font-medium uppercase ${severityClass}`}
-                  >
-                    {f.severity}
-                  </span>
-                  {f.message}
-                </li>
-              );
-            })}
+            {card.anomalyFlags.map((f, i) => (
+              <AnomalyFlagItem key={i} flag={f} />
+            ))}
           </ul>
         )}
       </div>
@@ -602,5 +600,84 @@ function BriefingCardPanel({
         </div>
       )}
     </div>
+  );
+}
+
+/**
+ * Phase 9 — F07 evidence chain expander. Click the flag's severity chip
+ * to expand the reasoning steps. Collapsed by default so the briefing
+ * card stays at-a-glance scannable.
+ */
+function AnomalyFlagItem({
+  flag,
+}: {
+  flag: {
+    code: string;
+    severity: "info" | "warning" | "critical";
+    message: string;
+    evidenceChain?: Array<{ label: string; detail: string }>;
+  };
+}) {
+  const [open, setOpen] = useState(false);
+  const severityClass = {
+    info: "bg-gray-100 text-gray-800",
+    warning: "bg-amber-100 text-amber-800",
+    critical: "bg-red-100 text-red-800",
+  }[flag.severity];
+  const hasChain = Array.isArray(flag.evidenceChain) && flag.evidenceChain.length > 0;
+
+  return (
+    <li className="text-xs leading-snug">
+      <button
+        type="button"
+        onClick={() => hasChain && setOpen((v) => !v)}
+        className={`mr-1 inline-block rounded px-1.5 py-0.5 text-[10px] font-medium uppercase ${severityClass} ${hasChain ? "cursor-pointer hover:opacity-80" : "cursor-default"}`}
+        aria-expanded={hasChain ? open : undefined}
+        aria-label={hasChain ? `${open ? "Hide" : "Show"} evidence for ${flag.code}` : undefined}
+      >
+        {flag.severity}
+        {hasChain && <span className="ml-1">{open ? "▾" : "▸"}</span>}
+      </button>
+      {flag.message}
+      {hasChain && open && (
+        <ul className="ml-6 mt-1 space-y-0.5 text-[11px] text-gray-700">
+          {flag.evidenceChain!.map((step, i) => (
+            <li key={i} className="flex gap-1">
+              <span className="font-medium text-gray-500">{step.label}:</span>
+              <span>{step.detail}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </li>
+  );
+}
+
+/**
+ * Phase 9 — F06: line-item confidence chip. Tooltip shows the reason
+ * (number of prior samples, σ distance, etc.). Renders "—" when the
+ * line wasn't scored.
+ */
+function LineConfidenceChip({
+  score,
+  reason,
+}: {
+  score: "high" | "medium" | "low" | "new" | null;
+  reason: string | null;
+}) {
+  if (!score) return <span className="text-gray-400">—</span>;
+  const palette = {
+    high: "bg-emerald-100 text-emerald-800",
+    medium: "bg-amber-100 text-amber-800",
+    low: "bg-red-100 text-red-800",
+    new: "bg-sky-100 text-sky-800",
+  }[score];
+  return (
+    <span
+      title={reason ?? undefined}
+      className={`inline-block rounded px-1.5 py-0.5 text-[10px] font-medium uppercase ${palette}`}
+    >
+      {score}
+    </span>
   );
 }

@@ -21,6 +21,7 @@ import {
   documentExtractions,
   vendors,
   vendorMatches,
+  vendorPricingHistory,
   validationResults,
 } from "@/db/schema";
 import { desc } from "drizzle-orm";
@@ -31,6 +32,8 @@ import {
   type ValidationFinding,
 } from ".";
 import { matchVendor } from "./vendor-match";
+import { scoreLine, isRateDrift, type LinePricingStats } from "./line-score";
+import { itemKeyword } from "@/jobs/recomputeVendorProfile";
 
 export interface RunValidationResult {
   findings: ValidationFinding[];
@@ -141,6 +144,20 @@ export async function runValidationInTx(
     .orderBy(desc(documentExtractions.createdAt))
     .limit(1);
 
+  // 4b. Phase 9 — D3 + F06: load vendor pricing stats for each keyword
+  // present in the line items, then score each line. Skip when there's
+  // no resolved vendor — we have no per-keyword history to compare to.
+  const lineScores = await scoreLinesAgainstVendorHistory(
+    tx,
+    vm.vendorId,
+    lines.map((l) => ({
+      id: l.id,
+      lineNumber: l.lineNumber,
+      description: l.description,
+      unitPrice: l.unitPrice === null ? null : Number(l.unitPrice),
+    })),
+  );
+
   // 5. Run the pure validator.
   const findings = validateInvoice({
     invoice: {
@@ -162,7 +179,24 @@ export async function runValidationInTx(
       ? { confidence: vm.confidence, score: vm.score }
       : null,
     textLength: latestExtraction?.textLength ?? null,
+    lineScores: lineScores.findings,
   });
+
+  // 5b. Persist per-line confidence onto extracted_invoice_lines so the
+  // review UI can render the confidence column without recomputing.
+  for (const u of lineScores.persistUpdates) {
+    await tx
+      .update(extractedInvoiceLines)
+      .set({
+        confidenceScore: u.score,
+        confidenceReason: u.reason,
+        histSampleCount: u.histSampleCount,
+        histAvgPrice: u.histAvgPrice,
+        histStddevPrice: u.histStddevPrice,
+        stddevDistance: u.stddevDistance,
+      })
+      .where(eq(extractedInvoiceLines.id, u.lineId));
+  }
 
   // 6. Persist — soft-supersede prior active row(s), then insert fresh.
   //    PR2: hard DELETE destroyed prior-blocking evidence (review #4).
@@ -219,4 +253,126 @@ export async function runValidationInTx(
       score: vm.score,
     },
   };
+}
+
+/**
+ * Phase 9 — D3 + F06: pull active vendor_pricing_history rows for each
+ * keyword present on the invoice's line items, score each line, and
+ * return (a) the score input the validator needs and (b) the per-line
+ * update set to persist on extracted_invoice_lines.
+ *
+ * Returns empty arrays when there's no resolved vendor. The line-item
+ * confidence column then stays NULL — the UI renders "—" rather than a
+ * misleading score.
+ */
+interface PersistLineUpdate {
+  lineId: string;
+  score: "high" | "medium" | "low" | "new";
+  reason: string;
+  histSampleCount: number | null;
+  histAvgPrice: string | null;
+  histStddevPrice: string | null;
+  stddevDistance: string | null;
+}
+
+async function scoreLinesAgainstVendorHistory(
+  tx: Tx,
+  vendorId: string | null,
+  lines: Array<{
+    id: string;
+    lineNumber: number | null;
+    description: string | null;
+    unitPrice: number | null;
+  }>,
+): Promise<{
+  findings: NonNullable<Parameters<typeof validateInvoice>[0]["lineScores"]>;
+  persistUpdates: PersistLineUpdate[];
+}> {
+  if (!vendorId || lines.length === 0) {
+    return { findings: [], persistUpdates: [] };
+  }
+
+  // Collect unique keywords needed this run. Pull all active stats rows
+  // for the vendor in one query, then build a per-keyword lookup. This
+  // is fewer round-trips than scoring line-by-line and the row count is
+  // bounded by the per-vendor keyword cap.
+  const keywords = new Set<string>();
+  const linesWithKeyword = lines.map((l) => {
+    const kw = itemKeyword(l.description);
+    if (kw) keywords.add(kw);
+    return { ...l, keyword: kw };
+  });
+  if (keywords.size === 0) {
+    return { findings: [], persistUpdates: [] };
+  }
+
+  const statRows = await tx
+    .select({
+      itemKeyword: vendorPricingHistory.itemKeyword,
+      avgUnitPrice: vendorPricingHistory.avgUnitPrice,
+      stddevUnitPrice: vendorPricingHistory.stddevUnitPrice,
+      samples: vendorPricingHistory.samples,
+    })
+    .from(vendorPricingHistory)
+    .where(
+      and(
+        eq(vendorPricingHistory.vendorId, vendorId),
+        isNull(vendorPricingHistory.supersededAt),
+        inArray(vendorPricingHistory.itemKeyword, Array.from(keywords)),
+      ),
+    );
+
+  const statsByKeyword = new Map<string, LinePricingStats>();
+  for (const r of statRows) {
+    statsByKeyword.set(r.itemKeyword, {
+      sampleCount: r.samples,
+      avgUnitPrice: Number(r.avgUnitPrice),
+      stddevUnitPrice:
+        r.stddevUnitPrice === null ? null : Number(r.stddevUnitPrice),
+    });
+  }
+
+  const findings: NonNullable<
+    Parameters<typeof validateInvoice>[0]["lineScores"]
+  > = [];
+  const persistUpdates: PersistLineUpdate[] = [];
+
+  for (const l of linesWithKeyword) {
+    if (l.unitPrice === null) continue;
+    const stats = l.keyword ? statsByKeyword.get(l.keyword) ?? null : null;
+    const result = scoreLine({ unitPrice: l.unitPrice }, stats);
+    if (!result) continue;
+
+    const lineNumber = l.lineNumber ?? 0;
+    const drift =
+      stats !== null && isRateDrift(l.unitPrice, stats, result);
+
+    findings.push({
+      lineNumber,
+      keyword: l.keyword,
+      score: result.score,
+      rateDrift: drift,
+      unitPrice: l.unitPrice,
+      historyAvg: stats?.avgUnitPrice ?? null,
+      stddevDistance: result.stddevDistance,
+    });
+
+    persistUpdates.push({
+      lineId: l.id,
+      score: result.score,
+      reason: result.reason,
+      histSampleCount: stats?.sampleCount ?? null,
+      histAvgPrice: stats === null ? null : stats.avgUnitPrice.toFixed(4),
+      histStddevPrice:
+        stats === null || stats.stddevUnitPrice === null
+          ? null
+          : stats.stddevUnitPrice.toFixed(4),
+      stddevDistance:
+        result.stddevDistance === null
+          ? null
+          : result.stddevDistance.toFixed(2),
+    });
+  }
+
+  return { findings, persistUpdates };
 }

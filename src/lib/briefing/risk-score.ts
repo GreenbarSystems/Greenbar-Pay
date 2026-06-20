@@ -34,7 +34,7 @@
  * distribution; minor for adding a factor; patch for tightening
  * descriptions.
  */
-export const RISK_SCORE_VERSION = "1.0.0";
+export const RISK_SCORE_VERSION = "1.1.0";
 
 export interface RiskFactor {
   code: string;
@@ -49,6 +49,19 @@ export interface RiskScoreInput {
   vendorDuplicateCount: number;
   textQualityLow: boolean;
   vendorWarmingUp: boolean;
+  /**
+   * Phase 9 — D3 rate drift. Count of `unit_price_drift` findings on
+   * the active validation row. Each drifting line nudges the score
+   * upward, capped at RATE_DRIFT_LINE_CAP so a long invoice with many
+   * drifters doesn't red-bar everything by itself.
+   */
+  rateDriftCount: number;
+  /**
+   * Phase 9 — F06 new line items. Boolean (whether any line keyword is
+   * new for this vendor) rather than a count — first invoice from a
+   * vendor with 30 line items should fire once, not 30 times.
+   */
+  hasNewLineItem: boolean;
 }
 
 export interface RiskScoreResult {
@@ -63,7 +76,13 @@ const WEIGHTS = {
   vendorDuplicates: 10,
   lowTextQuality: 8,
   warmingUp: 6,
+  // Phase 9 — D3 + F06. Per-line drift gets a meaningful nudge; new
+  // line items a one-shot bump.
+  rateDriftPerLine: 8,
+  newLineItem: 5,
 } as const;
+
+const RATE_DRIFT_LINE_CAP = 3;
 
 export function computeRiskScore(input: RiskScoreInput): RiskScoreResult {
   const factors: RiskFactor[] = [];
@@ -117,6 +136,24 @@ export function computeRiskScore(input: RiskScoreInput): RiskScoreResult {
       code: "vendor_warming_up",
       weight: WEIGHTS.warmingUp,
       note: "vendor profile has fewer than 3 prior invoices",
+    });
+  }
+  if (input.rateDriftCount > 0) {
+    const capped = Math.min(input.rateDriftCount, RATE_DRIFT_LINE_CAP);
+    const w = WEIGHTS.rateDriftPerLine * capped;
+    score += w;
+    factors.push({
+      code: "rate_drift",
+      weight: w,
+      note: `${input.rateDriftCount} line item${input.rateDriftCount === 1 ? "" : "s"} priced materially above vendor history`,
+    });
+  }
+  if (input.hasNewLineItem) {
+    score += WEIGHTS.newLineItem;
+    factors.push({
+      code: "new_line_item",
+      weight: WEIGHTS.newLineItem,
+      note: "one or more line items have not been seen from this vendor before",
     });
   }
 

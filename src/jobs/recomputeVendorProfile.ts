@@ -291,10 +291,17 @@ export async function handleRecomputeVendorProfile(
         ),
       );
 
-    const grouped = new Map<
-      string,
-      { sum: number; count: number; latest: Date }
-    >();
+    // Phase 9 — D3: keep the full price series per keyword so we can
+    // compute stddev / min / max / last / trend, not just the running
+    // average. The series is bounded by PRICING_SAMPLE_CAP per keyword
+    // to keep memory predictable on long-tail vendors.
+    interface KeywordSeries {
+      prices: number[];
+      dates: Date[];
+      latest: Date;
+      latestPrice: number;
+    }
+    const grouped = new Map<string, KeywordSeries>();
     for (const r of lineRows) {
       if (r.unitPrice === null) continue;
       const keyword = itemKeyword(r.description);
@@ -307,11 +314,19 @@ export async function handleRecomputeVendorProfile(
         : now;
       const existing = grouped.get(keyword);
       if (existing) {
-        existing.sum += price;
-        existing.count += 1;
-        if (date > existing.latest) existing.latest = date;
+        existing.prices.push(price);
+        existing.dates.push(date);
+        if (date > existing.latest) {
+          existing.latest = date;
+          existing.latestPrice = price;
+        }
       } else {
-        grouped.set(keyword, { sum: price, count: 1, latest: date });
+        grouped.set(keyword, {
+          prices: [price],
+          dates: [date],
+          latest: date,
+          latestPrice: price,
+        });
       }
     }
 
@@ -324,8 +339,8 @@ export async function handleRecomputeVendorProfile(
     // Prior aggregates remain queryable for the rate-drift validation
     // rule and the future evidence packet.
     for (const [keyword, agg] of grouped) {
-      const samples = Math.min(agg.count, PRICING_SAMPLE_CAP);
-      const avgPrice = agg.sum / agg.count;
+      const stats = computeKeywordStats(agg);
+      const samples = Math.min(stats.sampleCount, PRICING_SAMPLE_CAP);
 
       await tx
         .update(vendorPricingHistory)
@@ -346,9 +361,16 @@ export async function handleRecomputeVendorProfile(
           organizationId,
           vendorId,
           itemKeyword: keyword,
-          avgUnitPrice: avgPrice.toFixed(4),
+          avgUnitPrice: stats.avg.toFixed(4),
           samples,
           lastSeenAt: agg.latest,
+          // Phase 9 — D3 stats. stddev is NULL below 3 samples so the
+          // validator treats it as "insufficient data → no drift flag."
+          stddevUnitPrice: stats.stddev === null ? null : stats.stddev.toFixed(4),
+          minUnitPrice: stats.min.toFixed(4),
+          maxUnitPrice: stats.max.toFixed(4),
+          lastUnitPrice: stats.lastPrice.toFixed(4),
+          priceTrend: stats.trend,
         });
     }
 
@@ -368,6 +390,77 @@ export async function handleRecomputeVendorProfile(
       },
     });
   });
+}
+
+/**
+ * Phase 9 — D3 per-keyword stats compute. Pure, exported for testing.
+ *
+ * Trend is bucketed: split the chronologically-ordered price series in
+ * thirds, compare the mean of the most-recent third to the mean of the
+ * oldest third. > 5% up → rising; > 5% down → falling; else stable.
+ * The split-thirds approach is robust to outliers without needing a
+ * full regression. Under 3 samples returns `insufficient_data`.
+ */
+export interface KeywordStatsInput {
+  prices: number[];
+  dates: Date[];
+  latestPrice: number;
+}
+export interface KeywordStats {
+  sampleCount: number;
+  avg: number;
+  stddev: number | null;
+  min: number;
+  max: number;
+  lastPrice: number;
+  trend: "stable" | "rising" | "falling" | "insufficient_data";
+}
+
+const TREND_DELTA_THRESHOLD = 0.05;
+
+export function computeKeywordStats(input: KeywordStatsInput): KeywordStats {
+  const n = input.prices.length;
+  const avg = input.prices.reduce((a, p) => a + p, 0) / n;
+  const min = Math.min(...input.prices);
+  const max = Math.max(...input.prices);
+
+  // Sample standard deviation (n − 1). NULL when n < 2 — the rate-drift
+  // validator treats NULL stddev as "no signal" and skips the finding.
+  let stddev: number | null = null;
+  if (n >= 2) {
+    const variance =
+      input.prices.reduce((a, p) => a + (p - avg) ** 2, 0) / (n - 1);
+    stddev = Math.sqrt(variance);
+  }
+
+  let trend: KeywordStats["trend"] = "insufficient_data";
+  if (n >= 3) {
+    // Order prices by date ascending, then split-thirds.
+    const indexed = input.prices.map((p, i) => ({ p, d: input.dates[i] }));
+    indexed.sort((a, b) => a.d.getTime() - b.d.getTime());
+    const sorted = indexed.map((x) => x.p);
+    const third = Math.max(1, Math.floor(n / 3));
+    const oldMean = mean(sorted.slice(0, third));
+    const newMean = mean(sorted.slice(-third));
+    const delta = oldMean === 0 ? 0 : (newMean - oldMean) / oldMean;
+    if (delta > TREND_DELTA_THRESHOLD) trend = "rising";
+    else if (delta < -TREND_DELTA_THRESHOLD) trend = "falling";
+    else trend = "stable";
+  }
+
+  return {
+    sampleCount: n,
+    avg,
+    stddev,
+    min,
+    max,
+    lastPrice: input.latestPrice,
+    trend,
+  };
+}
+
+function mean(xs: number[]): number {
+  return xs.reduce((a, x) => a + x, 0) / xs.length;
 }
 
 /**

@@ -100,6 +100,24 @@ export const extractedInvoiceLines = pgTable(
     quantity: numeric("quantity", { precision: 14, scale: 4 }),
     unitPrice: numeric("unit_price", { precision: 14, scale: 4 }),
     amount: numeric("amount", { precision: 14, scale: 2 }),
+    /**
+     * Phase 9 — F06 line-item confidence scoring. Populated by
+     * validateExtractedInvoice when the line is scored against
+     * vendor_pricing_history (which acts as the stats table). Null when
+     * the line was never scored (legacy or no matched vendor).
+     *
+     *   'high'   — keyword seen ≥ 5 invoices, price within 1σ
+     *   'medium' — seen 2–4 invoices OR price 1–2σ from avg
+     *   'low'    — seen 0–1 invoices with price provided OR price > 2σ
+     *   'new'    — keyword never seen for this vendor before
+     */
+    confidenceScore: text("confidence_score"),
+    confidenceReason: text("confidence_reason"),
+    histSampleCount: integer("hist_sample_count"),
+    histAvgPrice: numeric("hist_avg_price", { precision: 14, scale: 4 }),
+    histStddevPrice: numeric("hist_stddev_price", { precision: 14, scale: 4 }),
+    /** |unit_price − avg| / stddev — null when stddev is null. */
+    stddevDistance: numeric("stddev_distance", { precision: 7, scale: 2 }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => ({

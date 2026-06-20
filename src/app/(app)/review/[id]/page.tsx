@@ -148,7 +148,23 @@ export default async function ReviewDetailPage({
         // Drizzle returns numerics as strings; the client form keeps them as strings.
         updatedAt: data.invoice.updatedAt.toISOString(),
       }}
-      lines={data.lines}
+      lines={data.lines.map((l) => ({
+        id: l.id,
+        lineNumber: l.lineNumber,
+        description: l.description,
+        quantity: l.quantity,
+        unitPrice: l.unitPrice,
+        amount: l.amount,
+        // Phase 9 — F06. Cast TEXT → union; DB CHECK constraint
+        // restricts to the same set, so the narrow cast is sound.
+        confidenceScore: l.confidenceScore as
+          | "high"
+          | "medium"
+          | "low"
+          | "new"
+          | null,
+        confidenceReason: l.confidenceReason,
+      }))}
       findings={
         Array.isArray(data.latestValidation?.errorsJson)
           ? (data.latestValidation!.errorsJson as Array<{
@@ -200,6 +216,8 @@ export default async function ReviewDetailPage({
                     code: string;
                     severity: "info" | "warning" | "critical";
                     message: string;
+                    // Phase 9 — F07: optional reasoning chain.
+                    evidenceChain?: Array<{ label: string; detail: string }>;
                   }>)
                 : [],
               deltaSummary: data.briefingCard.deltaSummary,
