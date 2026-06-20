@@ -145,17 +145,17 @@ export async function GET(
     );
   }
 
-  // Pretty-printed JSON so a human auditor can read it directly when
-  // the file is opened in a browser or editor.
-  const body = JSON.stringify(
-    {
-      manifestHash: result.manifestHash,
-      sealedAt: result.sealedAt?.toISOString() ?? null,
-      manifest: result.manifestJson,
-    },
-    null,
-    2,
-  );
+  // PR17 M-Pretty-Print — emit compact JSON. The previous (null, 2)
+  // pretty-print added ~30-40% wire bytes on every download and
+  // bypassed the Next.js compression middleware (attachment
+  // responses skip gzip). A 40 KB manifest became ~55 KB on the
+  // wire. Auditors can pretty-print locally; the network doesn't
+  // need to carry the indentation.
+  const body = JSON.stringify({
+    manifestHash: result.manifestHash,
+    sealedAt: result.sealedAt?.toISOString() ?? null,
+    manifest: result.manifestJson,
+  });
 
   // PR16 M-Filename — use the manifest hash prefix as a stable opaque
   // identifier instead of the invoice UUID. The UUID is internal and

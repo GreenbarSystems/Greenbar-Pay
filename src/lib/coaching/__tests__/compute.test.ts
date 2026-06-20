@@ -145,6 +145,33 @@ describe("computeCoachingPrompts", () => {
       expect(r.find((p) => p.code === "terms_mismatch")).toBeUndefined();
     });
 
+    // PR17 I3 — "net30" (no space, common from OCR) used to fall
+    // through the parse → fire as a generic mismatch against "Net 30".
+    it("treats 'net30' and 'Net 30' as equal (no space variant)", () => {
+      const r = computeCoachingPrompts(
+        inputs({
+          invoice: { paymentTerms: "net30" },
+          vendorProfile: { defaultPaymentTerms: "Net 30" },
+        }),
+      );
+      expect(r.find((p) => p.code === "terms_mismatch")).toBeUndefined();
+    });
+
+    it("parses 'net30' for the days-delta enrichment when mismatched", () => {
+      const r = computeCoachingPrompts(
+        inputs({
+          invoice: { paymentTerms: "net45" },
+          vendorProfile: { defaultPaymentTerms: "Net 30" },
+        }),
+      );
+      const prompt = r.find((p) => p.code === "terms_mismatch")!;
+      expect(prompt.message).toContain("15 days");
+      expect(prompt.context).toMatchObject({
+        invoiceDueDays: 45,
+        onFileDueDays: 30,
+      });
+    });
+
     it("falls back to generic message when neither side parses as Net N", () => {
       const r = computeCoachingPrompts(
         inputs({
@@ -263,6 +290,34 @@ describe("computeCoachingPrompts", () => {
         }),
       );
       expect(r.find((p) => p.code === "unusual_total")).toBeUndefined();
+    });
+
+    // PR17 I1 — credit memos / large negative totals are exactly the
+    // kind of anomaly that should fire (fraudulent reversal scenario).
+    // Previously the strict `total > avg * mult` check silently let
+    // them through.
+    it("fires on large credit memos (negative totals) with isCredit=true", () => {
+      const r = computeCoachingPrompts(
+        inputs({
+          invoice: { total: -5000 },
+          vendorProfile: { avgInvoiceAmount: "500", invoiceCount: 8 },
+        }),
+      );
+      const prompt = r.find((p) => p.code === "unusual_total");
+      expect(prompt).toBeDefined();
+      expect(prompt!.message).toContain("Credit/reversal");
+      expect(prompt!.context).toMatchObject({ isCredit: true });
+    });
+
+    it("standard above-average invoices still mark isCredit=false", () => {
+      const r = computeCoachingPrompts(
+        inputs({
+          invoice: { total: 1000 },
+          vendorProfile: { avgInvoiceAmount: "500", invoiceCount: 8 },
+        }),
+      );
+      const prompt = r.find((p) => p.code === "unusual_total")!;
+      expect(prompt.context).toMatchObject({ isCredit: false });
     });
   });
 

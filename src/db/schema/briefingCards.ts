@@ -7,6 +7,7 @@ import {
   jsonb,
   index,
 } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
 import { organizations } from "./organizations";
 import { extractedInvoices } from "./extractedInvoices";
 import { llmRuns } from "./llmRuns";
@@ -70,7 +71,14 @@ export const briefingCards = pgTable(
      * decision time is bound to the briefing_card pinned in
      * invoice.approved.metadataJson.activeBriefingCardId (PR6).
      */
-    coachingPromptsJson: jsonb("coaching_prompts_json").notNull().default([]),
+    // PR17 N-Empty-Default — sql`'[]'::jsonb` matches the migration's
+    // explicit DEFAULT and avoids the Drizzle .default([]) footgun
+    // PR4/PR5 flagged (the array literal can serialise oddly under
+    // some drizzle-kit regenerations, drifting from a `'[]'::jsonb`
+    // default to a `'{}'::jsonb` or stringified default).
+    coachingPromptsJson: jsonb("coaching_prompts_json")
+      .notNull()
+      .default(sql`'[]'::jsonb`),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     /** NULL = active. Set on supersede when regenerated. */
     supersededAt: timestamp("superseded_at", { withTimezone: true }),
