@@ -339,8 +339,16 @@ export async function handleRecomputeVendorProfile(
     // Prior aggregates remain queryable for the rate-drift validation
     // rule and the future evidence packet.
     for (const [keyword, agg] of grouped) {
+      // PR10 C3 — bound the per-keyword series at the point we feed it
+      // to computeKeywordStats. Previously PRICING_SAMPLE_CAP only
+      // bounded the *persisted samples count*; the in-memory arrays
+      // grew unbounded with vendor history and the stats sort ran on
+      // the full series. Now we keep the most-recent N entries (sorted
+      // by invoice date desc, slice, then return to date-asc order so
+      // trend math sees the same order as before).
+      truncateToMostRecent(agg, PRICING_SAMPLE_CAP);
       const stats = computeKeywordStats(agg);
-      const samples = Math.min(stats.sampleCount, PRICING_SAMPLE_CAP);
+      const samples = stats.sampleCount; // already capped
 
       await tx
         .update(vendorPricingHistory)
@@ -433,13 +441,17 @@ export function computeKeywordStats(input: KeywordStatsInput): KeywordStats {
     stddev = Math.sqrt(variance);
   }
 
+  // PR10 M1 — n < 6 is insufficient_data. At n=3-5 the prior split-thirds
+  // compared single prices end-to-end (third = max(1, floor(n/3)) = 1),
+  // making the trend signal volatile to a single noisy sample. n=6 with
+  // third=2 gives two prices per bucket — the minimum that yields a
+  // statistically defensible direction.
   let trend: KeywordStats["trend"] = "insufficient_data";
-  if (n >= 3) {
-    // Order prices by date ascending, then split-thirds.
+  if (n >= 6) {
     const indexed = input.prices.map((p, i) => ({ p, d: input.dates[i] }));
     indexed.sort((a, b) => a.d.getTime() - b.d.getTime());
     const sorted = indexed.map((x) => x.p);
-    const third = Math.max(1, Math.floor(n / 3));
+    const third = Math.max(2, Math.floor(n / 3));
     const oldMean = mean(sorted.slice(0, third));
     const newMean = mean(sorted.slice(-third));
     const delta = oldMean === 0 ? 0 : (newMean - oldMean) / oldMean;
@@ -461,6 +473,26 @@ export function computeKeywordStats(input: KeywordStatsInput): KeywordStats {
 
 function mean(xs: number[]): number {
   return xs.reduce((a, x) => a + x, 0) / xs.length;
+}
+
+/**
+ * PR10 C3 — trim a keyword series in place to the N most-recent samples
+ * by date. Idempotent when the series is already at or under the cap.
+ * Mutates the input arrays directly to avoid a copy.
+ */
+function truncateToMostRecent(
+  series: { prices: number[]; dates: Date[] },
+  cap: number,
+): void {
+  if (series.prices.length <= cap) return;
+  const indexed = series.prices.map((p, i) => ({ p, d: series.dates[i] }));
+  indexed.sort((a, b) => b.d.getTime() - a.d.getTime());
+  const kept = indexed.slice(0, cap);
+  // Restore date-asc ordering so downstream consumers (e.g. trend math)
+  // see the same temporal direction they did pre-truncation.
+  kept.sort((a, b) => a.d.getTime() - b.d.getTime());
+  series.prices = kept.map((x) => x.p);
+  series.dates = kept.map((x) => x.d);
 }
 
 /**

@@ -344,8 +344,9 @@ async function scoreLinesAgainstVendorHistory(
     if (!result) continue;
 
     const lineNumber = l.lineNumber ?? 0;
-    const drift =
-      stats !== null && isRateDrift(l.unitPrice, stats, result);
+    // PR10 C1: drift gate is no longer coupled to scoreLine — the
+    // sample-count constants now actually mean what they say.
+    const drift = stats !== null && isRateDrift(l.unitPrice, stats);
 
     findings.push({
       lineNumber,

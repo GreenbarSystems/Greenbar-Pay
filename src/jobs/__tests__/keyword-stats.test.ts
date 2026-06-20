@@ -110,4 +110,42 @@ describe("computeKeywordStats", () => {
     expect(r.max).toBe(200);
     expect(r.lastPrice).toBe(100);
   });
+
+  // PR10 M1 — trend signal needs ≥ 6 samples (two prices per third) to
+  // be meaningful. Below 6, return insufficient_data even though we have
+  // enough samples for stddev.
+  it.each([3, 4, 5])(
+    "trend = insufficient_data at n=%i (was fragile single-point compare)",
+    (n) => {
+      const prices = Array.from({ length: n }, (_, i) =>
+        i < n / 2 ? 100 : 200,
+      );
+      const dates = Array.from({ length: n }, (_, i) =>
+        d(`2026-0${i + 1}-01`),
+      );
+      const r = computeKeywordStats({
+        prices,
+        dates,
+        latestPrice: prices[prices.length - 1],
+      });
+      expect(r.trend).toBe("insufficient_data");
+      expect(r.stddev).not.toBeNull();
+    },
+  );
+
+  it("trend reads from ≥ 6 samples with two-price buckets", () => {
+    const r = computeKeywordStats({
+      prices: [100, 100, 100, 120, 120, 120],
+      dates: [
+        d("2026-01-01"),
+        d("2026-02-01"),
+        d("2026-03-01"),
+        d("2026-04-01"),
+        d("2026-05-01"),
+        d("2026-06-01"),
+      ],
+      latestPrice: 120,
+    });
+    expect(r.trend).toBe("rising");
+  });
 });
