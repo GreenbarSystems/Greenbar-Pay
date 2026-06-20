@@ -159,16 +159,14 @@ export async function POST(
             },
           };
         }
-        if (isOverrideAttempt && !can(role, "invoice.override")) {
-          return {
-            status: 403,
-            body: {
-              error: "forbidden",
-              message:
-                "Override (Stop Work Authority) requires admin or owner role.",
-            },
-          };
-        }
+        // PR14 C-RBAC-Override — the override check used to fire on the
+        // org-level role only, which inverted the per-client RBAC rule
+        // PR3 established for invoice.approve. A user who is `reviewer`
+        // at the org but elevated to `admin` on a specific client
+        // legitimately has override per effectiveRole = max(orgRole,
+        // clientRole). We defer the override permission check until
+        // AFTER the row snapshot below so we can resolve effectiveRole
+        // against the invoice's clientId, mirroring invoice.approve.
 
         // Snapshot the row BEFORE the UPDATE so the audit event records
         // the content that was approved. PATCH already does this.
@@ -191,22 +189,41 @@ export async function POST(
 
         // PR3 — per-client RBAC. If org role didn't grant, look up the
         // user's role for THIS client and compose. Per §1.5 effective
-        // permission = max(orgRole, clientRole).
+        // permission = max(orgRole, clientRole). PR14 — also resolves
+        // effectiveRole for the override permission check below so the
+        // two gates use the same role resolution.
+        let effectiveRole = role;
         if (!hasOrgPermission) {
-          const effective = await loadEffectiveRole(tx, {
+          effectiveRole = await loadEffectiveRole(tx, {
             userId,
             clientId: before.clientId,
             orgRole: role,
           });
-          if (!can(effective, "invoice.approve")) {
+          if (!can(effectiveRole, "invoice.approve")) {
             return {
               status: 403,
               body: {
                 error: "forbidden",
-                message: `${effective} lacks invoice.approve`,
+                message: `${effectiveRole} lacks invoice.approve`,
               },
             };
           }
+        }
+
+        // PR14 C-RBAC-Override — effectiveRole is now resolved above;
+        // gate Stop Work Authority on the same composed role used for
+        // invoice.approve. Without this an org-level reviewer who's
+        // admin-on-this-client couldn't use the override despite
+        // having the equivalent permission for the approval itself.
+        if (isOverrideAttempt && !can(effectiveRole, "invoice.override")) {
+          return {
+            status: 403,
+            body: {
+              error: "forbidden",
+              message:
+                "Override (Stop Work Authority) requires admin or owner role.",
+            },
+          };
         }
 
         // PR2 — separation of duties (review #2):
@@ -377,7 +394,13 @@ export async function POST(
               overrideAmount:
                 before.total === null ? null : String(before.total),
               blockingFindingCodes: blockingCodes,
-              ipAddress,
+              // PR14 C1 — invoice_override_log.ip_address is Postgres
+              // INET; Drizzle's TS schema models it as text() but writes
+              // need an explicit ::inet cast or Postgres throws
+              // "column is of type inet but expression is of type text"
+              // and the entire tx rolls back — taking the approve down
+              // with it. The cast handles null safely (NULL::inet).
+              ipAddress: sql`${ipAddress}::inet`,
               userAgent: userAgent?.slice(0, 500) ?? null,
               approvedAt: sql`now()`,
             })
