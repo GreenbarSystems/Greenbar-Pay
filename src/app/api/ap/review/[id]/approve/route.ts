@@ -419,7 +419,17 @@ export async function POST(
               blockingFindingCodes: blockingCodes,
               validationResultId: latest.id,
               hasSecondApprover: !!body.secondApproverId,
+              secondApproverId: body.secondApproverId ?? null,
               justificationLength: body.overrideJustification.length,
+              // PR15 M1 — explicit marker that the F02 spec's second-
+              // approver requirement above a $-threshold is currently
+              // unenforced. Auditor can query for this flag to know
+              // the gap is visible (not silently deferred). When the
+              // threshold lands the flag flips false and the audit
+              // semantic is preserved.
+              secondApproverEnforced: false,
+              overrideAmount:
+                before.total === null ? null : String(before.total),
             },
           });
         }

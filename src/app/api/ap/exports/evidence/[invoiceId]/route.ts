@@ -18,9 +18,11 @@ import { evidencePackets, extractedInvoices, auditEvents } from "@/db/schema";
 import { can } from "@/lib/rbac";
 import { loadPermittedClientIds } from "@/lib/rbac/client-scope";
 import { requireUuid } from "@/lib/route-helpers";
+import { getQueue, JOB } from "@/lib/queue";
+import { scrubError } from "@/lib/llm/scrub";
 
 export async function GET(
-  _req: Request,
+  req: Request,
   { params }: { params: { invoiceId: string } },
 ) {
   const bad = requireUuid(params.invoiceId);
@@ -96,6 +98,13 @@ export async function GET(
       metadataJson: {
         evidencePacketId: packet.id,
         manifestHash: packet.manifestHash,
+        // PR15 M-IP-UA — chain-of-custody attribution. The override
+        // ledger already captures these at write time; the read side
+        // needs them too so an auditor can prove who pulled the full
+        // payload and from where.
+        ipAddress:
+          req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ?? null,
+        userAgent: req.headers.get("user-agent")?.slice(0, 500) ?? null,
       },
     });
 
@@ -103,6 +112,29 @@ export async function GET(
   });
 
   if (!result) {
+    // PR15 H-Evidence-Capture — when no packet exists for an approved
+    // invoice (post-approval enqueue lost to a transient pg-boss
+    // outage, prior bug, etc.), re-enqueue the assemble job from the
+    // read path. Cheap: pg-boss `singletonKey` collapses any inflight
+    // duplicates. Without this, the approve route's fire-and-forget
+    // try/catch is the only retry surface, so a single dropped
+    // enqueue left the invoice permanently without an evidence
+    // packet — directly contradicting §D4.
+    try {
+      const boss = await getQueue();
+      await boss.send(
+        JOB.assembleEvidencePacket,
+        { extractedInvoiceId: params.invoiceId, organizationId },
+        {
+          singletonKey: `assemble-evidence-packet:${params.invoiceId}`,
+        },
+      );
+    } catch (err) {
+      console.warn(
+        `[evidence GET] re-enqueue failed for invoice=${params.invoiceId}; client retry will trigger again`,
+        scrubError(err),
+      );
+    }
     return NextResponse.json(
       {
         error: "not_ready",
