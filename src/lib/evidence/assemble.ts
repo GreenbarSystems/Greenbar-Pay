@@ -203,7 +203,32 @@ export async function assembleEvidenceManifest(
           riskScoreVersion: briefingCard.riskScoreVersion,
           riskJustification: briefingCard.riskJustification,
           riskFactors: briefingCard.riskFactorsJson,
-          coachingPrompts: briefingCard.coachingPromptsJson,
+          // PR19 — strip coaching.context from the manifest. The
+          // numeric baselines (projected30dSpend, priorSpend30,
+          // avgInvoiceAmount, invoiceTotal, variancePct) live in
+          // briefing_cards.coaching_prompts_json for in-app
+          // diagnostics, but the evidence packet is the downloadable
+          // surface — anyone with invoice.read on the client can
+          // pull it. Per-vendor financial baselines should stay in
+          // the sanctioned DB column, not on a downloadable file.
+          // The CoachingPanel already only renders {code, severity,
+          // message, dollarImpact}.
+          coachingPrompts: Array.isArray(briefingCard.coachingPromptsJson)
+            ? (
+                briefingCard.coachingPromptsJson as Array<{
+                  code?: string;
+                  severity?: string;
+                  message?: string;
+                  dollarImpact?: number | null;
+                  context?: unknown;
+                }>
+              ).map((p) => ({
+                code: p.code,
+                severity: p.severity,
+                message: p.message,
+                dollarImpact: p.dollarImpact ?? null,
+              }))
+            : [],
         }
       : null,
     vendorProfileSnapshot: briefingCard?.vendorContextJson ?? null,

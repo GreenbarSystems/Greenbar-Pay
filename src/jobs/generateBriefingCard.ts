@@ -367,6 +367,45 @@ export async function handleGenerateBriefingCard(
       return;
     }
 
+    // PR19 — re-check the invoice's reviewStatus inside the persist tx.
+    // The prep tx (which had its own status check) commits before the
+    // LLM dispatch. While dispatch is in flight (~5s) the reviewer can
+    // approve the invoice — by the time persist runs the invoice is
+    // already `approved` and the pinned briefingCardId in the approve
+    // audit event would be silently superseded by this write.
+    //
+    // Belt-and-braces with PR18 C3 (assembler resolves by pinned id):
+    // even if assemble correctly walks the pin, an approve→regenerate
+    // race would still leave the active-row state confusing for
+    // operators and downstream readers. Skip the supersede+insert when
+    // the invoice is no longer in an active review state.
+    const [currentInvoice] = await tx
+      .select({ reviewStatus: extractedInvoices.reviewStatus })
+      .from(extractedInvoices)
+      .where(eq(extractedInvoices.id, extractedInvoiceId))
+      .limit(1);
+    if (
+      !currentInvoice ||
+      !ACTIVE_REVIEW_STATUSES.includes(
+        currentInvoice.reviewStatus as "pending",
+      )
+    ) {
+      await tx.insert(auditEvents).values({
+        organizationId,
+        actorType: "worker",
+        action: "briefing.skipped_after_dispatch",
+        entityType: "extracted_invoice",
+        entityId: extractedInvoiceId,
+        metadataJson: {
+          llmRunId: run.id,
+          reviewStatusAtPersist: currentInvoice?.reviewStatus ?? null,
+          reason:
+            "Invoice transitioned out of an active review status while LLM dispatch was in flight — skipping supersede to keep the approve-time pin intact.",
+        },
+      });
+      return;
+    }
+
     // PR12 H3 — read the prior briefing's score BEFORE we supersede it,
     // so we can detect band crossings and emit a dedicated audit event.
     // The active-active partial unique index guarantees at most one row;

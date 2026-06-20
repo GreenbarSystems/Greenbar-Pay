@@ -7,9 +7,18 @@
  *   No key → request proceeds (one-shot mutation).
  */
 import { createHash } from "node:crypto";
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { apiIdempotencyKeys } from "@/db/schema";
 import { withOrg, type Tx } from "@/db/client";
+
+/**
+ * PR19 — TTL window for idempotency-key replay safety. Per addendum
+ * §4.6 the cache is documented as 24h; the read path was previously
+ * unbounded so a key 30 days old returned the cached 200 silently.
+ * Expressed in SQL so the predicate uses the DB clock (the same
+ * clock the row was written under), avoiding worker-clock drift.
+ */
+const IDEMPOTENCY_TTL_SQL = sql`now() - interval '24 hours'`;
 
 export function hashRequest(method: string, path: string, body: unknown): string {
   return createHash("sha256")
@@ -40,6 +49,10 @@ export async function readIdempotencyKey(
         and(
           eq(apiIdempotencyKeys.key, key),
           eq(apiIdempotencyKeys.organizationId, organizationId),
+          // PR19 — stale keys count as MISS so the handler re-runs
+          // rather than silently replaying a now-stale 200. The TTL
+          // predicate uses the DB clock for clock-skew safety.
+          sql`${apiIdempotencyKeys.createdAt} > ${IDEMPOTENCY_TTL_SQL}`,
         ),
       )
       .limit(1);

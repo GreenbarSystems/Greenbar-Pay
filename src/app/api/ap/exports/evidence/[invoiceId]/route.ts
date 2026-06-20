@@ -116,24 +116,52 @@ export async function GET(
     // invoice (post-approval enqueue lost to a transient pg-boss
     // outage, prior bug, etc.), re-enqueue the assemble job from the
     // read path. Cheap: pg-boss `singletonKey` collapses any inflight
-    // duplicates. Without this, the approve route's fire-and-forget
-    // try/catch is the only retry surface, so a single dropped
-    // enqueue left the invoice permanently without an evidence
-    // packet — directly contradicting §D4.
-    try {
-      const boss = await getQueue();
-      await boss.send(
-        JOB.assembleEvidencePacket,
-        { extractedInvoiceId: params.invoiceId, organizationId },
-        {
-          singletonKey: `assemble-evidence-packet:${params.invoiceId}`,
-        },
-      );
-    } catch (err) {
-      console.warn(
-        `[evidence GET] re-enqueue failed for invoice=${params.invoiceId}; client retry will trigger again`,
-        scrubError(err),
-      );
+    // duplicates.
+    //
+    // PR19 — gate the re-enqueue on the invoice being in approved /
+    // exported state. The prior code re-enqueued unconditionally,
+    // which let any caller with invoice.read probe arbitrary invoice
+    // UUIDs and trigger an infinite retry storm: the assembler
+    // throws to retry when invoice.approved is missing, so a probe
+    // against a not-yet-approved invoice queued backoff retries
+    // forever. The status check turns the probe path into a clean
+    // 404 with no work scheduled.
+    const [invoiceState] = await withOrg(organizationId, async (tx) => {
+      return tx
+        .select({
+          reviewStatus: extractedInvoices.reviewStatus,
+          clientId: extractedInvoices.clientId,
+        })
+        .from(extractedInvoices)
+        .where(
+          and(
+            eq(extractedInvoices.id, params.invoiceId),
+            eq(extractedInvoices.organizationId, organizationId),
+          ),
+        )
+        .limit(1);
+    });
+
+    if (
+      invoiceState &&
+      (invoiceState.reviewStatus === "approved" ||
+        invoiceState.reviewStatus === "exported")
+    ) {
+      try {
+        const boss = await getQueue();
+        await boss.send(
+          JOB.assembleEvidencePacket,
+          { extractedInvoiceId: params.invoiceId, organizationId },
+          {
+            singletonKey: `assemble-evidence-packet:${params.invoiceId}`,
+          },
+        );
+      } catch (err) {
+        console.warn(
+          `[evidence GET] re-enqueue failed for invoice=${params.invoiceId}; client retry will trigger again`,
+          scrubError(err),
+        );
+      }
     }
     return NextResponse.json(
       {
