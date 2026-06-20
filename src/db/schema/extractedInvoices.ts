@@ -119,6 +119,13 @@ export const extractedInvoiceLines = pgTable(
     /** |unit_price − avg| / stddev — null when stddev is null. */
     stddevDistance: numeric("stddev_distance", { precision: 7, scale: 2 }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    /**
+     * PR12 M5 — null on legacy rows; written by every confidence
+     * UPDATE from runValidationInTx so each row carries the DB clock
+     * at last score time. Lets auditors order revalidation events
+     * and pair them with the corresponding validation_results row.
+     */
+    updatedAt: timestamp("updated_at", { withTimezone: true }),
   },
   (t) => ({
     parentIdx: index("idx_extracted_invoice_lines_parent").on(

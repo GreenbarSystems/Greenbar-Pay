@@ -1,5 +1,9 @@
 import { describe, it, expect } from "vitest";
-import { computeRiskScore, riskBand } from "@/lib/briefing/risk-score";
+import {
+  computeRiskScore,
+  riskBand,
+  RISK_SCORE_VERSION,
+} from "@/lib/briefing/risk-score";
 
 const baseInput = {
   blockingFindingCount: 0,
@@ -97,6 +101,69 @@ describe("computeRiskScore", () => {
       "new_line_item",
     ]);
   });
+});
+
+// PR12 M6 — snapshot pinning the version constant to the score for a
+// canonical input. Any WEIGHTS or formula change without bumping
+// RISK_SCORE_VERSION fails CI here, forcing the bump policy documented
+// in risk-score.ts to be enforced rather than honoured by convention.
+//
+// To intentionally bump: update RISK_SCORE_VERSION, then update the
+// EXPECTED_* constants below to the new scores in the same commit.
+describe("RISK_SCORE_VERSION snapshot", () => {
+  const EXPECTED_VERSION = "1.1.0";
+
+  // Same input fixtures, scores hand-computed against the WEIGHTS table.
+  const EXPECTED_SCORES: Array<{
+    label: string;
+    input: typeof baseInput;
+    score: number;
+  }> = [
+    { label: "clean invoice", input: { ...baseInput }, score: 0 },
+    {
+      label: "one blocking finding",
+      input: { ...baseInput, blockingFindingCount: 1 },
+      score: 30,
+    },
+    {
+      label: "warming-up vendor only",
+      input: { ...baseInput, vendorWarmingUp: true },
+      score: 6,
+    },
+    {
+      label: "two warning findings + terms drift + duplicate + low text",
+      input: {
+        ...baseInput,
+        warningFindingCount: 2,
+        vendorTermsDrift: true,
+        vendorDuplicateCount: 1,
+        textQualityLow: true,
+      },
+      score: 12 + 12 + 10 + 8, // 42
+    },
+    {
+      label: "two rate-drift lines + new line item",
+      input: { ...baseInput, rateDriftCount: 2, hasNewLineItem: true },
+      score: 8 * 2 + 5, // 21
+    },
+    {
+      label: "rate drift caps at 3 lines",
+      input: { ...baseInput, rateDriftCount: 10 },
+      score: 8 * 3, // 24
+    },
+  ];
+
+  it("RISK_SCORE_VERSION constant matches the locked snapshot", () => {
+    expect(RISK_SCORE_VERSION).toBe(EXPECTED_VERSION);
+  });
+
+  it.each(EXPECTED_SCORES)(
+    "fixture '$label' scores $score at v$EXPECTED_VERSION",
+    ({ input, score }) => {
+      const r = computeRiskScore(input);
+      expect(r.score).toBe(score);
+    },
+  );
 });
 
 describe("riskBand", () => {

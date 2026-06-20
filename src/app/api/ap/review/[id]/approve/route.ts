@@ -32,7 +32,9 @@ import {
   auditEvents,
   documents,
   briefingCards,
+  llmRuns,
 } from "@/db/schema";
+import { riskBand } from "@/lib/briefing/risk-score";
 import { can, loadEffectiveRole } from "@/lib/rbac";
 import { withIdempotency } from "@/lib/review/idempotencyWrap";
 import {
@@ -251,8 +253,22 @@ export async function POST(
         //      `metadataJson.frozenAt` marker. Future Phase 11 code
         //      will pin via an FK on extracted_invoices; this PR keeps
         //      the audit-row reference as the minimum.
+        // PR12 H1+H2 — pin the briefing card AND the full attestation
+        // chain (llm_run id, prompt input hash, risk score + version +
+        // band) into the audit event metadata. Without this, an audit
+        // query starting from `audit_events` can't reproduce the score
+        // without joining through briefing_cards and llm_runs — and
+        // if the active briefing race produced a null card id, the
+        // score / version / hash become unrecoverable from the audit
+        // log alone.
         const [activeBriefing] = await tx
-          .select({ id: briefingCards.id, generatedAt: briefingCards.createdAt })
+          .select({
+            id: briefingCards.id,
+            generatedAt: briefingCards.createdAt,
+            llmRunId: briefingCards.llmRunId,
+            riskScore: briefingCards.riskScore,
+            riskScoreVersion: briefingCards.riskScoreVersion,
+          })
           .from(briefingCards)
           .where(
             and(
@@ -262,6 +278,20 @@ export async function POST(
           )
           .orderBy(desc(briefingCards.createdAt))
           .limit(1);
+
+        // PR12 H1 — pull inputHash from llm_runs separately. Joining
+        // briefing_cards → llm_runs in one query is cleaner but the
+        // pin step already has the briefing row; a second small lookup
+        // is fine and keeps the schema decoupled.
+        let llmInputHash: string | null = null;
+        if (activeBriefing?.llmRunId) {
+          const [run] = await tx
+            .select({ inputHash: llmRuns.inputHash })
+            .from(llmRuns)
+            .where(eq(llmRuns.id, activeBriefing.llmRunId))
+            .limit(1);
+          llmInputHash = run?.inputHash ?? null;
+        }
 
         await tx.insert(auditEvents).values({
           organizationId,
@@ -293,6 +323,22 @@ export async function POST(
             briefingGeneratedAt: activeBriefing?.generatedAt
               ? activeBriefing.generatedAt.toISOString()
               : null,
+            // PR12 H1+H2 — full attestation chain. llmRunId + inputHash
+            // bind the score to the exact prompt the model saw; the
+            // riskScore / riskScoreVersion / riskBand triplet lets an
+            // auditor verify the deterministic compute by checking out
+            // the matching commit. All five fields are nullable: when
+            // the briefing card race produces no active card, the
+            // audit still records that the gap existed.
+            briefingLlmRunId: activeBriefing?.llmRunId ?? null,
+            briefingInputHash: llmInputHash,
+            riskScore: activeBriefing?.riskScore ?? null,
+            riskScoreVersion: activeBriefing?.riskScoreVersion ?? null,
+            riskBand:
+              activeBriefing?.riskScore !== undefined &&
+              activeBriefing?.riskScore !== null
+                ? riskBand(activeBriefing.riskScore)
+                : null,
           },
         });
 

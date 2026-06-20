@@ -43,7 +43,11 @@ import {
   auditEvents,
 } from "@/db/schema";
 import { LOW_TEXT_LENGTH } from "@/lib/ocr/text-quality";
-import { computeRiskScore, RISK_SCORE_VERSION } from "@/lib/briefing/risk-score";
+import {
+  computeRiskScore,
+  RISK_SCORE_VERSION,
+  riskBand,
+} from "@/lib/briefing/risk-score";
 import { dispatchBriefingCardGeneration } from "@/lib/llm";
 import { scrubError } from "@/lib/llm/scrub";
 import type { JobPayloads } from "@/lib/queue";
@@ -357,6 +361,21 @@ export async function handleGenerateBriefingCard(
       return;
     }
 
+    // PR12 H3 — read the prior briefing's score BEFORE we supersede it,
+    // so we can detect band crossings and emit a dedicated audit event.
+    // The active-active partial unique index guarantees at most one row;
+    // priorScore is null on the very first briefing for an invoice.
+    const [priorBriefing] = await tx
+      .select({ riskScore: briefingCards.riskScore })
+      .from(briefingCards)
+      .where(
+        and(
+          eq(briefingCards.extractedInvoiceId, extractedInvoiceId),
+          isNull(briefingCards.supersededAt),
+        ),
+      )
+      .limit(1);
+
     // Success: supersede prior active row, insert fresh.
     await tx
       .update(briefingCards)
@@ -385,6 +404,13 @@ export async function handleGenerateBriefingCard(
       riskFactorsJson: prep.risk.factors,
     });
 
+    // PR12 M10 — record band + strongest factor on briefing.generated
+    // so audit queries can identify which invoices crossed into the red
+    // band, and which factor drove the score, without joining through
+    // briefing_cards.
+    const newBand = riskBand(prep.risk.score);
+    const dominantFactor = prep.risk.factors[0]?.code ?? null;
+
     await tx.insert(auditEvents).values({
       organizationId,
       actorType: "worker",
@@ -395,10 +421,40 @@ export async function handleGenerateBriefingCard(
         llmRunId: run.id,
         riskScore: prep.risk.score,
         riskScoreVersion: RISK_SCORE_VERSION,
+        riskBand: newBand,
+        dominantFactor,
         anomalyFlagCount: r.anomalyFlags.length,
         glCode: r.glCode,
       },
     });
+
+    // PR12 H3 — band-change attestation event. Fires when the new score
+    // crosses a band relative to the immediately-prior briefing card on
+    // this invoice. Skipped on the first briefing (no prior to compare)
+    // and on intra-band recomputes. Auditors querying for "which
+    // invoices ever entered the red band" can filter this single event
+    // instead of joining through the full briefing_cards history.
+    if (
+      priorBriefing &&
+      typeof priorBriefing.riskScore === "number" &&
+      riskBand(priorBriefing.riskScore) !== newBand
+    ) {
+      await tx.insert(auditEvents).values({
+        organizationId,
+        actorType: "worker",
+        action: "briefing.band_changed",
+        entityType: "extracted_invoice",
+        entityId: extractedInvoiceId,
+        metadataJson: {
+          fromBand: riskBand(priorBriefing.riskScore),
+          fromScore: priorBriefing.riskScore,
+          toBand: newBand,
+          toScore: prep.risk.score,
+          dominantFactor,
+          riskScoreVersion: RISK_SCORE_VERSION,
+        },
+      });
+    }
   });
 }
 

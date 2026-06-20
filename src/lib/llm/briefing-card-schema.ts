@@ -47,12 +47,15 @@ const AnomalyFlag = z.object({
     .max(280)
     .describe("Plain-English explanation an approver can act on."),
   /**
-   * Phase 9 — F07: structured reasoning trail per anomaly. Optional so
-   * pre-Phase-9 briefing rows remain decodable, but the prompt now
-   * requires it on every flag the model emits. Capped at 6 steps so a
-   * runaway model can't unroll a vendor profile into prose here.
+   * Phase 9 — F07: structured reasoning trail per anomaly. The briefing
+   * prompt (since 2026-06-20) requires this on every flag. PR12 H4
+   * tightens the LLM tool-use decoder to match: min(2) steps, required.
+   * Pre-Phase-9 briefing rows live in DB JSONB and are read directly
+   * (not through this schema) — the read path already handles missing
+   * chains as optional. Capping at 6 steps prevents the model from
+   * unrolling a vendor profile into prose here.
    */
-  evidenceChain: z.array(EvidenceStep).max(6).optional(),
+  evidenceChain: z.array(EvidenceStep).min(2).max(6),
 });
 
 export const BriefingCardSchema = z.object({
@@ -128,7 +131,9 @@ export const BRIEFING_TOOL_JSON_SCHEMA = {
           evidenceChain: {
             type: "array",
             description:
-              "Reasoning trail an approver can audit. Labelled steps grounded in the inputs.",
+              "Reasoning trail an approver can audit. Labelled steps grounded in the inputs. Required: 2–6 steps per anomaly.",
+            minItems: 2,
+            maxItems: 6,
             items: {
               type: "object",
               properties: {
@@ -139,7 +144,9 @@ export const BRIEFING_TOOL_JSON_SCHEMA = {
             },
           },
         },
-        required: ["code", "severity", "message"],
+        // PR12 H4 — evidenceChain promoted to required at the tool-use
+        // boundary so a degraded model response can't silently drop it.
+        required: ["code", "severity", "message", "evidenceChain"],
       },
     },
     deltaSummary: {
