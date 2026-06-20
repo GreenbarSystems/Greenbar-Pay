@@ -176,9 +176,13 @@ export function computeCoachingPrompts(
       severity: "warning",
       message,
       dollarImpact: null,
+      // PR16 L1 — drop the literal terms strings from context. The
+      // message conveys the days-delta + direction; the raw
+      // "Net 15" / "Net 30" strings add no audit signal the auditor
+      // can't recover from extracted_invoices.payment_terms and
+      // vendors.default_payment_terms. Numeric due-days kept since
+      // they're aggregate-style data, not literal contract text.
       context: {
-        invoiceTerms: invoice.paymentTerms,
-        onFileTerms: vendorProfile.defaultPaymentTerms,
         invoiceDueDays: invoiceDays,
         onFileDueDays: onFileDays,
       },

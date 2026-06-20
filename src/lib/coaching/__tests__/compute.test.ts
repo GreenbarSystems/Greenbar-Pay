@@ -166,6 +166,24 @@ describe("computeCoachingPrompts", () => {
       );
       expect(r.find((p) => p.code === "terms_mismatch")).toBeUndefined();
     });
+
+    // PR16 L1 — context no longer carries the literal contract strings;
+    // numeric due-days are sufficient and aggregate-safe.
+    it("context contains only the numeric due-days, not the literal terms strings", () => {
+      const r = computeCoachingPrompts(
+        inputs({
+          invoice: { paymentTerms: "Net 15" },
+          vendorProfile: { defaultPaymentTerms: "Net 30" },
+        }),
+      );
+      const prompt = r.find((p) => p.code === "terms_mismatch")!;
+      expect(prompt.context).not.toHaveProperty("invoiceTerms");
+      expect(prompt.context).not.toHaveProperty("onFileTerms");
+      expect(prompt.context).toMatchObject({
+        invoiceDueDays: 15,
+        onFileDueDays: 30,
+      });
+    });
   });
 
   // ── new_line_item_coaching ─────────────────────────────────────────

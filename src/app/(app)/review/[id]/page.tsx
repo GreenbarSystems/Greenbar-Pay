@@ -256,19 +256,35 @@ export default async function ReviewDetailPage({
               riskScore: data.briefingCard.riskScore,
               riskJustification: data.briefingCard.riskJustification,
               generatedAt: data.briefingCard.createdAt.toISOString(),
-              // Phase 10 — D5: deterministic coaching prompts. Same
-              // structural pattern as anomaly flags — JSONB column,
-              // narrow cast at the boundary.
+              // Phase 10 — D5: deterministic coaching prompts.
+              // PR16 H1 — explicit projection. The TS cast narrows the
+              // shape but Drizzle returns the full JSONB blob, so a
+              // bare pass-through shipped `context` (per-vendor
+              // projected30dSpend, priorSpend30, avgInvoiceAmount,
+              // invoiceTotal, terms strings) across the RSC payload —
+              // same systemic boundary leak PR11 C5 caught for
+              // validation findings.context. The CoachingPanel only
+              // renders message + dollarImpact; the structured
+              // numbers live on briefing_cards.coaching_prompts_json
+              // for evidence-packet retrieval, never on the wire.
               id: data.briefingCard.id,
               coachingPrompts: Array.isArray(
                 data.briefingCard.coachingPromptsJson,
               )
-                ? (data.briefingCard.coachingPromptsJson as Array<{
-                    code: string;
-                    severity: "info" | "warning" | "critical";
-                    message: string;
-                    dollarImpact?: number | null;
-                  }>)
+                ? (
+                    data.briefingCard.coachingPromptsJson as Array<{
+                      code: string;
+                      severity: "info" | "warning" | "critical";
+                      message: string;
+                      dollarImpact?: number | null;
+                      context?: unknown;
+                    }>
+                  ).map((p) => ({
+                    code: p.code,
+                    severity: p.severity,
+                    message: p.message,
+                    dollarImpact: p.dollarImpact ?? null,
+                  }))
                 : [],
             }
           : null

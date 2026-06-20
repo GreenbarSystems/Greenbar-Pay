@@ -11,11 +11,12 @@
  * No idempotency wrap — this is a read.
  */
 import { NextResponse } from "next/server";
-import { and, eq } from "drizzle-orm";
+import { and, eq, isNull, inArray, or } from "drizzle-orm";
 import { auth } from "@/lib/auth";
 import { withOrg } from "@/db/client";
-import { evidencePackets, auditEvents } from "@/db/schema";
+import { evidencePackets, extractedInvoices, auditEvents } from "@/db/schema";
 import { can } from "@/lib/rbac";
+import { loadPermittedClientIds } from "@/lib/rbac/client-scope";
 import { requireUuid } from "@/lib/route-helpers";
 
 export async function GET(
@@ -31,15 +32,31 @@ export async function GET(
   }
   const { organizationId, role, id: userId } = session.user;
 
-  // Read scope: anyone who can read an invoice can pull its evidence
-  // packet. Per-client narrowing isn't relevant — RLS already filters
-  // by org; if the user can read the invoice in the UI, they can read
-  // the matching packet.
   if (!can(role, "invoice.read")) {
     return NextResponse.json({ error: "forbidden" }, { status: 403 });
   }
 
   const result = await withOrg(organizationId, async (tx) => {
+    // PR16 H2 — per-client read scope. Without this a viewer/clerk
+    // with explicit per-client grants could pull the FULL packet
+    // (vendor PII, history, override justification) for any invoice
+    // in the org regardless of their client grants. Same loadPermitted
+    // ClientIds pattern PR6 added to the vendor pages. Owner/admin/
+    // reviewer get org-wide; clerk/viewer narrow by user_client_access.
+    const permitted = await loadPermittedClientIds(tx, {
+      userId,
+      orgRole: role,
+    });
+    const clientFilter =
+      permitted === null
+        ? undefined
+        : permitted.length === 0
+          ? isNull(extractedInvoices.clientId)
+          : or(
+              isNull(extractedInvoices.clientId),
+              inArray(extractedInvoices.clientId, permitted),
+            );
+
     const [packet] = await tx
       .select({
         id: evidencePackets.id,
@@ -48,13 +65,25 @@ export async function GET(
         sealedAt: evidencePackets.sealedAt,
       })
       .from(evidencePackets)
+      .innerJoin(
+        extractedInvoices,
+        eq(extractedInvoices.id, evidencePackets.extractedInvoiceId),
+      )
       .where(
-        and(
-          eq(evidencePackets.extractedInvoiceId, params.invoiceId),
-          eq(evidencePackets.organizationId, organizationId),
-        ),
+        clientFilter
+          ? and(
+              eq(evidencePackets.extractedInvoiceId, params.invoiceId),
+              eq(evidencePackets.organizationId, organizationId),
+              clientFilter,
+            )
+          : and(
+              eq(evidencePackets.extractedInvoiceId, params.invoiceId),
+              eq(evidencePackets.organizationId, organizationId),
+            ),
       )
       .limit(1);
+    // 404 over 403 on the per-client miss — leaks no signal about
+    // whether the invoice exists in a client the user can't see.
     if (!packet) return null;
 
     await tx.insert(auditEvents).values({
@@ -96,11 +125,19 @@ export async function GET(
     2,
   );
 
+  // PR16 M-Filename — use the manifest hash prefix as a stable opaque
+  // identifier instead of the invoice UUID. The UUID is internal and
+  // appearing in download history / filesystem / forwarded emails
+  // gives an unnecessary link back to the row for anyone with read
+  // access. The hash prefix is auditor-friendly (matches the
+  // manifestHash field inside the file) without exposing the join key.
+  const filename = `evidence-${result.manifestHash.slice(0, 12)}.json`;
+
   return new NextResponse(body, {
     status: 200,
     headers: {
       "Content-Type": "application/json",
-      "Content-Disposition": `attachment; filename="evidence-${params.invoiceId}.json"`,
+      "Content-Disposition": `attachment; filename="${filename}"`,
       "Cache-Control": "private, no-store",
     },
   });
