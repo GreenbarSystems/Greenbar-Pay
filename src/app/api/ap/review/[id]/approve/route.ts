@@ -23,6 +23,7 @@
  * someone clicked approve.
  */
 import { NextResponse } from "next/server";
+import { z } from "zod";
 import { and, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { auth } from "@/lib/auth";
 import { withOrg } from "@/db/client";
@@ -33,6 +34,7 @@ import {
   documents,
   briefingCards,
   llmRuns,
+  invoiceOverrideLog,
 } from "@/db/schema";
 import { riskBand } from "@/lib/briefing/risk-score";
 import { can, loadEffectiveRole } from "@/lib/rbac";
@@ -45,6 +47,23 @@ import {
 import { bootstrapVendorOnApprove } from "@/lib/vendors/bootstrap";
 import { getQueue, JOB } from "@/lib/queue";
 import { scrubError } from "@/lib/llm/scrub";
+
+/**
+ * Phase 11 — F02 Stop Work Authority body schema. When blocking
+ * findings exist, the route refuses unless the body includes a
+ * justification of at least 20 chars (the DB CHECK echoes this floor).
+ * Body is optional on the happy path — clean approves don't touch it.
+ */
+const ApproveBodySchema = z
+  .object({
+    overrideJustification: z
+      .string()
+      .min(20, "justification must be at least 20 characters")
+      .max(2000)
+      .optional(),
+    secondApproverId: z.string().uuid().optional(),
+  })
+  .partial();
 
 export async function POST(
   req: Request,
@@ -63,11 +82,33 @@ export async function POST(
   // round trip for the common case where the org role already permits.
   const hasOrgPermission = can(role, "invoice.approve");
 
+  // Phase 11 F02 — parse override body when present. Empty body still
+  // produces a valid (empty) object; only malformed JSON throws.
+  let bodyJson: unknown = {};
+  try {
+    const raw = await req.text();
+    if (raw.length > 0) bodyJson = JSON.parse(raw);
+  } catch {
+    return NextResponse.json({ error: "invalid_body" }, { status: 400 });
+  }
+  let body: z.infer<typeof ApproveBodySchema>;
+  try {
+    body = ApproveBodySchema.parse(bodyJson);
+  } catch (err) {
+    return NextResponse.json(
+      { error: "invalid_body", issues: (err as z.ZodError).issues },
+      { status: 400 },
+    );
+  }
+  const ipAddress =
+    req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ?? null;
+  const userAgent = req.headers.get("user-agent");
+
   return withIdempotency(
     req,
     organizationId,
     `/api/ap/review/${params.id}/approve`,
-    {},
+    body,
     async () => {
       const txResult = await withOrg(organizationId, async (tx) => {
         // Block approval until an ACTIVE validation row EXISTS (closes the
@@ -98,13 +139,33 @@ export async function POST(
             },
           };
         }
-        if (latest.severity === "blocking" && !latest.passed) {
+        // Phase 11 — F02 Stop Work Authority. With blocking findings
+        // present, approve is refused UNLESS the caller provided an
+        // override justification ≥ 20 chars. The override is recorded
+        // before commit so it can never be missing from the audit
+        // chain even on a partial write. Only admin/owner can use the
+        // override path; reviewer can approve clean invoices only.
+        const hasBlockingFindings =
+          latest.severity === "blocking" && !latest.passed;
+        const isOverrideAttempt =
+          hasBlockingFindings && !!body.overrideJustification;
+        if (hasBlockingFindings && !isOverrideAttempt) {
           return {
             status: 422,
             body: {
               error: "blocking_findings",
               message:
-                "Invoice has blocking validation findings. Resolve via PATCH before approving.",
+                "Invoice has blocking validation findings. Resolve via PATCH or supply an overrideJustification (Stop Work Authority).",
+            },
+          };
+        }
+        if (isOverrideAttempt && !can(role, "invoice.override")) {
+          return {
+            status: 403,
+            body: {
+              error: "forbidden",
+              message:
+                "Override (Stop Work Authority) requires admin or owner role.",
             },
           };
         }
@@ -293,6 +354,53 @@ export async function POST(
           llmInputHash = run?.inputHash ?? null;
         }
 
+        // Phase 11 F02 — Stop Work Authority. Record the override
+        // BEFORE the invoice.approved audit so the chain is:
+        //   invoice.override_recorded → invoice.approved
+        // never just invoice.approved with no preceding override.
+        let overrideRowId: string | null = null;
+        if (isOverrideAttempt && body.overrideJustification) {
+          const blockingCodes = Array.isArray(latest.errorsJson)
+            ? (latest.errorsJson as Array<{ code: string; severity: string }>)
+                .filter((f) => f.severity === "blocking")
+                .map((f) => f.code)
+            : [];
+          const [overrideRow] = await tx
+            .insert(invoiceOverrideLog)
+            .values({
+              organizationId,
+              extractedInvoiceId: params.id,
+              documentId: before.documentId,
+              overridingUserId: userId,
+              secondApproverId: body.secondApproverId ?? null,
+              justificationText: body.overrideJustification,
+              overrideAmount:
+                before.total === null ? null : String(before.total),
+              blockingFindingCodes: blockingCodes,
+              ipAddress,
+              userAgent: userAgent?.slice(0, 500) ?? null,
+              approvedAt: sql`now()`,
+            })
+            .returning({ id: invoiceOverrideLog.id });
+          overrideRowId = overrideRow?.id ?? null;
+
+          await tx.insert(auditEvents).values({
+            organizationId,
+            actorType: "user",
+            actorId: userId,
+            action: "invoice.override_recorded",
+            entityType: "extracted_invoice",
+            entityId: params.id,
+            metadataJson: {
+              overrideId: overrideRowId,
+              blockingFindingCodes: blockingCodes,
+              validationResultId: latest.id,
+              hasSecondApprover: !!body.secondApproverId,
+              justificationLength: body.overrideJustification.length,
+            },
+          });
+        }
+
         await tx.insert(auditEvents).values({
           organizationId,
           actorType: "user",
@@ -315,6 +423,11 @@ export async function POST(
             sodPassed: true,
             vendorBootstrap: bootstrap,
             uploaderId: parentDoc?.createdBy ?? null,
+            // Phase 11 F02 — link the override row so an audit query
+            // starting from invoice.approved can resolve the override
+            // without a separate join.
+            overrideId: overrideRowId,
+            overrideUsed: isOverrideAttempt,
             // PR6 — review #4: briefing card pinned at approve time.
             // null is valid (no card existed yet, e.g. validation race);
             // the pre-flight already blocks approval until validation
@@ -377,6 +490,27 @@ export async function POST(
         } catch (err) {
           console.warn(
             `[approve] recompute-vendor-profile enqueue failed for vendor=${txResult.enqueueRecompute}; approve committed, profile will refresh on next approve`,
+            scrubError(err),
+          );
+        }
+      }
+
+      // Phase 11 D4 — kick the evidence-packet assemble job for every
+      // approve (override or not). Same wrap-in-try pattern as the
+      // recompute enqueue: a transient pg-boss outage shouldn't bleed
+      // into the response. The assemble job is idempotent on
+      // (org, invoiceId), so an operator can replay manually if needed.
+      if (txResult.status === 200) {
+        try {
+          const boss = await getQueue();
+          await boss.send(
+            JOB.assembleEvidencePacket,
+            { extractedInvoiceId: params.id, organizationId },
+            { singletonKey: `assemble-evidence-packet:${params.id}` },
+          );
+        } catch (err) {
+          console.warn(
+            `[approve] assemble-evidence-packet enqueue failed for invoice=${params.id}; approve committed, packet can be re-enqueued by an operator`,
             scrubError(err),
           );
         }

@@ -50,6 +50,8 @@ export const JOB = {
   exportInvoices: "export-invoices",
   recomputeVendorProfile: "recompute-vendor-profile",
   generateBriefingCard: "generate-briefing-card",
+  // Phase 11 — D4
+  assembleEvidencePacket: "assemble-evidence-packet",
 } as const;
 
 export type JobPayloads = {
@@ -62,6 +64,10 @@ export type JobPayloads = {
   [JOB.exportInvoices]: { exportId: string; organizationId: string };
   [JOB.recomputeVendorProfile]: { vendorId: string; organizationId: string };
   [JOB.generateBriefingCard]: {
+    extractedInvoiceId: string;
+    organizationId: string;
+  };
+  [JOB.assembleEvidencePacket]: {
     extractedInvoiceId: string;
     organizationId: string;
   };
