@@ -239,8 +239,14 @@ function serialiseInvoice(
     remitToName: inv.remitToName,
     remitToAddress: inv.remitToAddress,
     invoiceNumber: inv.invoiceNumber,
-    invoiceDate: inv.invoiceDate,
-    dueDate: inv.dueDate,
+    // PR15 H-Date-Hash — Postgres `date` columns are returned by Drizzle
+    // as YYYY-MM-DD strings today, but the binding is not load-bearing
+    // — a future Drizzle change to return Date objects would shift the
+    // canonical hash for the same logical content, breaking any
+    // auditor's recomputation against existing packets. Explicit
+    // String coercion pins the contract at the serialiser.
+    invoiceDate: inv.invoiceDate === null ? null : String(inv.invoiceDate),
+    dueDate: inv.dueDate === null ? null : String(inv.dueDate),
     paymentTerms: inv.paymentTerms,
     purchaseOrderNumber: inv.purchaseOrderNumber,
     currency: inv.currency,
