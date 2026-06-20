@@ -23,6 +23,7 @@ import {
   vendorMatches,
   vendorPricingHistory,
   validationResults,
+  auditEvents,
 } from "@/db/schema";
 import { desc } from "drizzle-orm";
 import {
@@ -182,20 +183,96 @@ export async function runValidationInTx(
     lineScores: lineScores.findings,
   });
 
-  // 5b. Persist per-line confidence onto extracted_invoice_lines so the
-  // review UI can render the confidence column without recomputing.
-  for (const u of lineScores.persistUpdates) {
-    await tx
-      .update(extractedInvoiceLines)
-      .set({
+  // 5b. PR12 C4 — per-line confidence used to be a bare in-place UPDATE,
+  // which silently destroyed the evidence that supported any previously
+  // active briefing card. We now snapshot the prior values, write the
+  // new ones with a DB-clock updated_at marker, and emit a single
+  // `line_confidence.recalculated` audit event when at least one field
+  // actually changed. The validation_results row already preserves the
+  // findings chain; this preserves the line-level numerical evidence
+  // that backs the findings.
+  if (lineScores.persistUpdates.length > 0) {
+    const lineIds = lineScores.persistUpdates.map((u) => u.lineId);
+    const priorRows = await tx
+      .select({
+        id: extractedInvoiceLines.id,
+        lineNumber: extractedInvoiceLines.lineNumber,
+        confidenceScore: extractedInvoiceLines.confidenceScore,
+        confidenceReason: extractedInvoiceLines.confidenceReason,
+        histSampleCount: extractedInvoiceLines.histSampleCount,
+        histAvgPrice: extractedInvoiceLines.histAvgPrice,
+        histStddevPrice: extractedInvoiceLines.histStddevPrice,
+        stddevDistance: extractedInvoiceLines.stddevDistance,
+        updatedAt: extractedInvoiceLines.updatedAt,
+      })
+      .from(extractedInvoiceLines)
+      .where(inArray(extractedInvoiceLines.id, lineIds));
+    const priorById = new Map(priorRows.map((r) => [r.id, r]));
+    const changedSnapshots: Array<{
+      lineId: string;
+      lineNumber: number | null;
+      before: Record<string, unknown>;
+      after: Record<string, unknown>;
+    }> = [];
+
+    for (const u of lineScores.persistUpdates) {
+      const prior = priorById.get(u.lineId);
+      const after = {
         confidenceScore: u.score,
         confidenceReason: u.reason,
         histSampleCount: u.histSampleCount,
         histAvgPrice: u.histAvgPrice,
         histStddevPrice: u.histStddevPrice,
         stddevDistance: u.stddevDistance,
-      })
-      .where(eq(extractedInvoiceLines.id, u.lineId));
+      };
+      const changed =
+        !prior ||
+        prior.confidenceScore !== after.confidenceScore ||
+        prior.histSampleCount !== after.histSampleCount ||
+        prior.histAvgPrice !== after.histAvgPrice ||
+        prior.histStddevPrice !== after.histStddevPrice ||
+        prior.stddevDistance !== after.stddevDistance;
+
+      await tx
+        .update(extractedInvoiceLines)
+        .set({ ...after, updatedAt: sql`now()` })
+        .where(eq(extractedInvoiceLines.id, u.lineId));
+
+      if (changed && prior) {
+        changedSnapshots.push({
+          lineId: u.lineId,
+          lineNumber: prior.lineNumber,
+          before: {
+            confidenceScore: prior.confidenceScore,
+            confidenceReason: prior.confidenceReason,
+            histSampleCount: prior.histSampleCount,
+            histAvgPrice: prior.histAvgPrice,
+            histStddevPrice: prior.histStddevPrice,
+            stddevDistance: prior.stddevDistance,
+            recordedAt: prior.updatedAt?.toISOString() ?? null,
+          },
+          after,
+        });
+      }
+    }
+
+    if (changedSnapshots.length > 0) {
+      await tx.insert(auditEvents).values({
+        organizationId: args.organizationId,
+        actorType: "worker",
+        action: "line_confidence.recalculated",
+        entityType: "extracted_invoice",
+        entityId: args.extractedInvoiceId,
+        metadataJson: {
+          // The structured before/after carries the pre-edit numerical
+          // evidence that any prior briefing card was generated from.
+          // Phase 11's evidence packet joins by extractedInvoiceId to
+          // reconstruct the full lineage. Numbers here are sanctioned —
+          // same pattern as validation_results.errors_json.
+          changes: changedSnapshots,
+        },
+      });
+    }
   }
 
   // 6. Persist — soft-supersede prior active row(s), then insert fresh.
