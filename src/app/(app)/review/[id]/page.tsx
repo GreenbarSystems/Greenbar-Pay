@@ -155,7 +155,11 @@ export default async function ReviewDetailPage({
 
   if (!data || !data.doc) notFound();
 
-  const fileUrl = await storage.getSignedUrl(data.doc.storageKey, 300);
+  // PR19 — signed URL TTL aligned with the export download route
+  // (120s). The prior 300s window was unnecessarily wide: an iframe
+  // loads the document well within 10s. Shorter window narrows the
+  // exposure if the URL ends up in browser history / extension caches.
+  const fileUrl = await storage.getSignedUrl(data.doc.storageKey, 120);
 
   return (
     <ReviewDetailClient

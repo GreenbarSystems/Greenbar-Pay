@@ -16,7 +16,7 @@ import { requireUuid } from "@/lib/route-helpers";
 const SIGNED_URL_TTL_SECONDS = 120;
 
 export async function GET(
-  _req: Request,
+  req: Request,
   { params }: { params: { id: string } },
 ) {
   const bad = requireUuid(params.id);
@@ -75,6 +75,13 @@ export async function GET(
         metadataJson: {
           format: row.format,
           ttlSeconds: SIGNED_URL_TTL_SECONDS,
+          // PR19 — chain of custody at the bulk-export download. The
+          // evidence packet GET already captures these (PR15 M-IP-UA);
+          // the export download is the other high-value download path
+          // and an auditor needs the same parity.
+          ipAddress:
+            req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ?? null,
+          userAgent: req.headers.get("user-agent")?.slice(0, 500) ?? null,
         },
       });
     });
