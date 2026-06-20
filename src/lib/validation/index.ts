@@ -143,7 +143,11 @@ export function validateInvoice(inputs: ValidationInputs): ValidationFinding[] {
       findings.push({
         code: "duplicate_invoice",
         severity: "blocking",
-        message: `invoice '${inv.invoiceNumber}' from '${inv.vendorName}' already approved/exported`,
+        // PR11 M8 — message reaches Anthropic via the briefing prompt.
+        // PR7's PII guard forbids vendor name + invoice number in
+        // outputs; keep them out of inputs too. The structured context
+        // still carries duplicateKey for the sanctioned errors_json.
+        message: "A prior approved invoice with the same vendor and invoice number was found.",
         context: { duplicateKey: key },
       });
     }
@@ -239,13 +243,17 @@ export function validateInvoice(inputs: ValidationInputs): ValidationFinding[] {
         s.historyAvg && s.historyAvg !== 0
           ? Math.round(((s.unitPrice - s.historyAvg) / s.historyAvg) * 1000) / 10
           : null;
+      // PR11 C6 — message goes to Anthropic via the briefing prompt.
+      // Use directional/range language instead of exact dollar amounts.
+      // Precise figures stay in the sanctioned `context` field for
+      // validation_results.errors_json (and the UI rendering path).
       findings.push({
         code: "unit_price_drift",
         severity: "warning",
         message:
           pct === null
             ? `Line ${s.lineNumber} unit price differs materially from prior history.`
-            : `Line ${s.lineNumber} unit price $${s.unitPrice.toFixed(2)} is ${pct > 0 ? "+" : ""}${pct.toFixed(1)}% vs historical avg.`,
+            : `Line ${s.lineNumber} unit price is materially ${pct > 0 ? "above" : "below"} historical average.`,
         context: {
           lineNumber: s.lineNumber,
           keyword: s.keyword,

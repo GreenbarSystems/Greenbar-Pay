@@ -54,9 +54,14 @@ export function scoreLine(
     };
   }
 
-  // Insufficient samples or stddev couldn't be computed (n < 2). Bucket
-  // by sample count alone: 1 sample is low-confidence, 2+ without
-  // stddev is medium ("we have some history but not enough to score").
+  // PR11 H7 — reason strings surface to ALL roles via the line
+  // confidence tooltip on the review page (LineConfidenceChip's title
+  // attribute). The prior strings exposed exact per-vendor averages
+  // ("Matches 8-invoice avg of $245.00") to viewer-only users, which
+  // widened the in-org information disclosure footprint. Replace exact
+  // dollar values with sample counts and σ-distance — both are
+  // statistical descriptors a reviewer can act on without disclosing
+  // the historical pricing baseline directly.
   if (stats.stddevUnitPrice === null || stats.stddevUnitPrice === 0) {
     if (stats.sampleCount < 2) {
       return {
@@ -78,7 +83,7 @@ export function scoreLine(
   if (dist <= 1.0 && stats.sampleCount >= 5) {
     return {
       score: "high",
-      reason: `Matches ${stats.sampleCount}-invoice avg of $${stats.avgUnitPrice.toFixed(2)} (within 1σ).`,
+      reason: `Within expected range across ${stats.sampleCount} prior samples (≤ 1σ).`,
       stddevDistance: distRounded,
     };
   }
@@ -86,14 +91,14 @@ export function scoreLine(
   if (dist <= 2.0 || stats.sampleCount < 5) {
     return {
       score: "medium",
-      reason: `${distRounded.toFixed(1)}σ from avg — limited history (${stats.sampleCount} invoices).`,
+      reason: `${distRounded.toFixed(1)}σ from historical mean — limited history (${stats.sampleCount} samples).`,
       stddevDistance: distRounded,
     };
   }
 
   return {
     score: "low",
-    reason: `${distRounded.toFixed(1)}σ above historical avg — statistically unusual.`,
+    reason: `${distRounded.toFixed(1)}σ from historical mean — statistically unusual.`,
     stddevDistance: distRounded,
   };
 }

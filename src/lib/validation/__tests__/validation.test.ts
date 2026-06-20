@@ -64,6 +64,47 @@ describe("validateInvoice", () => {
     expect(f.find((x) => x.code === "duplicate_invoice")?.severity).toBe("blocking");
   });
 
+  // PR11 M8 — finding message reaches Anthropic via the briefing prompt.
+  // Vendor name + invoice number must NOT appear there.
+  it("duplicate_invoice message does not echo vendor name or invoice number", () => {
+    const key = duplicateKey("ABC Supplies LLC", "INV-10492");
+    const f = validateInvoice({
+      ...inputs(),
+      priorApprovedKeys: new Set([key]),
+    });
+    const dup = f.find((x) => x.code === "duplicate_invoice")!;
+    expect(dup.message).not.toContain("ABC Supplies LLC");
+    expect(dup.message).not.toContain("INV-10492");
+    // Structured context still carries the key for the sanctioned audit row.
+    expect(dup.context).toHaveProperty("duplicateKey", key);
+  });
+
+  // PR11 C6 — drift message must not carry exact dollar amounts.
+  it("unit_price_drift message does not carry exact dollar figures", () => {
+    const f = validateInvoice({
+      ...inputs(),
+      lineScores: [
+        {
+          lineNumber: 1,
+          keyword: "consulting",
+          score: "low",
+          rateDrift: true,
+          unitPrice: 312.4,
+          historyAvg: 245.0,
+          stddevDistance: 3.2,
+        },
+      ],
+    });
+    const drift = f.find((x) => x.code === "unit_price_drift")!;
+    expect(drift.message).not.toMatch(/\$\d/);
+    expect(drift.message).not.toMatch(/%/);
+    expect(drift.context).toMatchObject({
+      lineNumber: 1,
+      historyAvg: 245.0,
+      unitPrice: 312.4,
+    });
+  });
+
   it("warns when due date is before invoice date", () => {
     const f = validateInvoice(inputs({ dueDate: "2026-04-01" }));
     expect(f.find((x) => x.code === "due_date_before_invoice_date")?.severity).toBe("warning");

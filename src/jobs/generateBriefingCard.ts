@@ -124,14 +124,33 @@ export async function handleGenerateBriefingCard(
           .then((r) => r[0]),
       ]);
 
-    const findingsRaw =
+    // PR11 C5 — strip the `context` field at the boundary. The TS cast
+    // below narrows the shape but Drizzle returns the full JSONB object
+    // at runtime, so a bare pass-through would ship vendor-attributable
+    // numbers (historyAvg, exact unitPrice, variancePct, duplicateKey)
+    // to Anthropic in the briefing prompt. The `context` is sanctioned
+    // only for validation_results.errors_json — never for the LLM
+    // dispatch path. The explicit `.map` ensures the structured numbers
+    // stop here even if future findings add more sensitive context
+    // shapes.
+    const rawErrors =
       latestValidation && Array.isArray(latestValidation.errorsJson)
         ? (latestValidation.errorsJson as Array<{
             code: string;
             severity: string;
             message: string;
+            context?: unknown;
           }>)
         : [];
+    const findingsRaw: Array<{
+      code: string;
+      severity: string;
+      message: string;
+    }> = rawErrors.map((f) => ({
+      code: f.code,
+      severity: f.severity,
+      message: f.message,
+    }));
     const blockingFindingCount = findingsRaw.filter(
       (f) => f.severity === "blocking",
     ).length;
@@ -276,7 +295,13 @@ export async function handleGenerateBriefingCard(
         }
       : null,
     riskScore: prep.risk.score,
-    riskFactors: prep.risk.factors,
+    // PR11 M9 — drop the `note` field. The full RiskFactor lives on
+    // briefing_cards.riskFactorsJson for the UI/evidence packet; the
+    // model only needs the code + weight to pick the strongest factor.
+    riskFactors: prep.risk.factors.map((f) => ({
+      code: f.code,
+      weight: f.weight,
+    })),
   });
 
   // Phase 3 — persist outcome.

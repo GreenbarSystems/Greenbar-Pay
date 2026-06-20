@@ -43,8 +43,24 @@ export default async function ReviewDetailPage({
       .where(eq(documents.id, invoice.documentId))
       .limit(1);
 
+    // PR11 H8 — explicit projection. select() was shipping the new
+    // Phase 9 hist_avg_price, hist_stddev_price, and stddev_distance
+    // columns to the browser via the RSC payload — per-vendor financial
+    // baselines that the UI never renders. The confidence chip + tooltip
+    // only use confidence_score + confidence_reason; everything else
+    // belongs in the sanctioned validation_results lineage, not the
+    // wire.
     const lines = await tx
-      .select()
+      .select({
+        id: extractedInvoiceLines.id,
+        lineNumber: extractedInvoiceLines.lineNumber,
+        description: extractedInvoiceLines.description,
+        quantity: extractedInvoiceLines.quantity,
+        unitPrice: extractedInvoiceLines.unitPrice,
+        amount: extractedInvoiceLines.amount,
+        confidenceScore: extractedInvoiceLines.confidenceScore,
+        confidenceReason: extractedInvoiceLines.confidenceReason,
+      })
       .from(extractedInvoiceLines)
       .where(eq(extractedInvoiceLines.extractedInvoiceId, invoice.id))
       .orderBy(extractedInvoiceLines.lineNumber);
@@ -166,12 +182,25 @@ export default async function ReviewDetailPage({
         confidenceReason: l.confidenceReason,
       }))}
       findings={
+        // PR11 — strip `context` at the browser boundary. errors_json
+        // is the sanctioned storage shape (validation_results table)
+        // and carries per-vendor historyAvg / unitPrice / variancePct
+        // on Phase 9 drift findings. The review UI only renders
+        // {code, severity, message} — the structured numbers stay in
+        // the DB row.
         Array.isArray(data.latestValidation?.errorsJson)
-          ? (data.latestValidation!.errorsJson as Array<{
-              code: string;
-              severity: string;
-              message: string;
-            }>)
+          ? (
+              data.latestValidation!.errorsJson as Array<{
+                code: string;
+                severity: string;
+                message: string;
+                context?: unknown;
+              }>
+            ).map((f) => ({
+              code: f.code,
+              severity: f.severity,
+              message: f.message,
+            }))
           : []
       }
       vendorMatch={
