@@ -7,6 +7,7 @@
  */
 import { notFound } from "next/navigation";
 import { auth } from "@/lib/auth";
+import { can } from "@/lib/rbac";
 import { withOrg } from "@/db/client";
 import {
   vendors,
@@ -15,7 +16,7 @@ import {
   extractedInvoices,
   documents,
 } from "@/db/schema";
-import { and, desc, eq, inArray, isNull } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { requireUuid } from "@/lib/route-helpers";
 import { loadPermittedClientIds } from "@/lib/rbac/client-scope";
 
@@ -84,8 +85,11 @@ export default async function VendorDetailPage({
           and(
             eq(extractedInvoices.organizationId, organizationId),
             inArray(extractedInvoices.reviewStatus, ["approved", "exported"]),
-            // Match by canonical name — Phase 8 will add a real vendor_id FK.
-            eq(extractedInvoices.vendorName, vendor.name),
+            // PR20 — match via normalize_vendor_text so the functional
+            // index idx_ei_org_norm_vendor_name (PR8) is used. Previous
+            // raw eq(vendorName, vendor.name) was case-sensitive AND
+            // unindexed; both bugs.
+            sql`normalize_vendor_text(${extractedInvoices.vendorName}) = ${vendor.normalizedName}`,
           ),
         )
         .orderBy(desc(extractedInvoices.invoiceDate))
@@ -161,6 +165,12 @@ export default async function VendorDetailPage({
         />
       </div>
 
+      {/* PR20 — pricing baselines gated on invoice.approve. Per-vendor
+          avg/stddev figures are vendor-attributable financial signal;
+          showing them to viewer-only roles widened the internal info-
+          disclosure surface beyond what PR11 H7 / PR16 M3 narrowed for
+          the confidence reason + coaching panel. Same gate pattern. */}
+      {can(role, "invoice.approve") && (
       <Section title="Pricing history">
         {pricing.length === 0 ? (
           <p className="text-xs text-gray-500">
@@ -191,6 +201,7 @@ export default async function VendorDetailPage({
           </table>
         )}
       </Section>
+      )}
 
       <Section title="Recent approved invoices">
         {recentApprovedInvoices.length === 0 ? (

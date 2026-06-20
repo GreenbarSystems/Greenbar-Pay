@@ -482,7 +482,27 @@ export async function handleGenerateBriefingCard(
       riskJustification: r.riskJustification,
       // PR6 — review #4: version tag pinned to the runtime constant.
       riskScoreVersion: RISK_SCORE_VERSION,
-      vendorContextJson: prep.vendorProfile,
+      // PR20 — snapshot only the fields needed for the evidence packet
+      // + UI; drop internal identifiers (id, organizationId, clientId,
+      // externalVendorId, normalizedName, status, createdAt) that the
+      // assembler doesn't surface and that have no audit utility.
+      // Trims the row size on briefing_cards and keeps the evidence
+      // manifest narrower without losing any reviewer-relevant field.
+      vendorContextJson: prep.vendorProfile
+        ? {
+            name: prep.vendorProfile.name,
+            aliases: prep.vendorProfile.aliases,
+            invoiceCount: prep.vendorProfile.invoiceCount,
+            lastInvoiceDate: prep.vendorProfile.lastInvoiceDate,
+            spend30d: prep.vendorProfile.spend30d,
+            spend90d: prep.vendorProfile.spend90d,
+            avgInvoiceAmount: prep.vendorProfile.avgInvoiceAmount,
+            defaultPaymentTerms: prep.vendorProfile.defaultPaymentTerms,
+            defaultGlCode: prep.vendorProfile.defaultGlCode,
+            termsDriftDetected: prep.vendorProfile.termsDriftDetected,
+            duplicateSubmissionCount: prep.vendorProfile.duplicateSubmissionCount,
+          }
+        : null,
       riskFactorsJson: prep.risk.factors,
       // Phase 10 — D5
       coachingPromptsJson: coachingPrompts,

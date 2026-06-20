@@ -129,8 +129,13 @@ async function handleSqsMessage(
         rawMessageStorageKey: key,
         mailbox,
       });
+      // PR20 — log a short opaque suffix of the storage key instead
+      // of the full path. The key is not direct PII but links the log
+      // entry back to a specific inbound message; the suffix lets an
+      // operator correlate without having the full S3 path in stdout.
+      const keyTag = key.slice(-12);
       console.log(
-        `[inbox] ${key} → ${result.kind === "duplicate" ? "duplicate" : result.status}`,
+        `[inbox] …${keyTag} → ${result.kind === "duplicate" ? "duplicate" : result.status}`,
       );
     }
 

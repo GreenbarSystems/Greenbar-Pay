@@ -25,6 +25,14 @@ export async function getQueue(): Promise<PgBoss> {
       retryLimit: 5,
       retryDelay: 30, // seconds
       retryBackoff: true,
+      // PR20 — pg-boss archive + delete retention. Defaults keep
+      // completed jobs in `pgboss.archive` for 14 days, then delete
+      // forever. At pilot scale (~2k jobs/day) the table accretes
+      // slowly but unboundedly without explicit hygiene. 7-day
+      // archive + 24-hour delete-after-complete keeps the table
+      // surface small while leaving an operator-debuggable window.
+      archiveCompletedAfterSeconds: 24 * 3600,
+      deleteAfterDays: 7,
     });
     b.on("error", (err) => console.error("[pg-boss]", err));
     await b.start();
