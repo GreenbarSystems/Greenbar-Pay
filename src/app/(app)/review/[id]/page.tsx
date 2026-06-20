@@ -120,12 +120,15 @@ export default async function ReviewDetailPage({
     // the full row from the DB; UI doesn't need it here.
     const [briefingCard] = await tx
       .select({
+        // Phase 10 — D5 adds coachingPromptsJson; otherwise unchanged.
+        id: briefingCards.id,
         glCode: briefingCards.glCode,
         glRationale: briefingCards.glRationale,
         anomalyFlagsJson: briefingCards.anomalyFlagsJson,
         deltaSummary: briefingCards.deltaSummary,
         riskScore: briefingCards.riskScore,
         riskJustification: briefingCards.riskJustification,
+        coachingPromptsJson: briefingCards.coachingPromptsJson,
         createdAt: briefingCards.createdAt,
       })
       .from(briefingCards)
@@ -253,6 +256,20 @@ export default async function ReviewDetailPage({
               riskScore: data.briefingCard.riskScore,
               riskJustification: data.briefingCard.riskJustification,
               generatedAt: data.briefingCard.createdAt.toISOString(),
+              // Phase 10 — D5: deterministic coaching prompts. Same
+              // structural pattern as anomaly flags — JSONB column,
+              // narrow cast at the boundary.
+              id: data.briefingCard.id,
+              coachingPrompts: Array.isArray(
+                data.briefingCard.coachingPromptsJson,
+              )
+                ? (data.briefingCard.coachingPromptsJson as Array<{
+                    code: string;
+                    severity: "info" | "warning" | "critical";
+                    message: string;
+                    dollarImpact?: number | null;
+                  }>)
+                : [],
             }
           : null
       }
