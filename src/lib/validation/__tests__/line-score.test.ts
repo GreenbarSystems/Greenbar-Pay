@@ -82,63 +82,79 @@ describe("scoreLine", () => {
 });
 
 describe("isRateDrift", () => {
-  const goodScore = {
-    score: "low" as const,
-    reason: "",
-    stddevDistance: 4,
-  };
-
   it("does not fire below RATE_DRIFT_MIN_SAMPLES", () => {
     expect(
-      isRateDrift(
-        130,
-        {
-          sampleCount: RATE_DRIFT_MIN_SAMPLES - 1,
-          avgUnitPrice: 100,
-          stddevUnitPrice: 5,
-        },
-        goodScore,
-      ),
+      isRateDrift(130, {
+        sampleCount: RATE_DRIFT_MIN_SAMPLES - 1,
+        avgUnitPrice: 100,
+        stddevUnitPrice: 5,
+      }),
     ).toBe(false);
   });
 
   it("does not fire when stddev is null", () => {
     expect(
-      isRateDrift(
-        130,
-        { sampleCount: 5, avgUnitPrice: 100, stddevUnitPrice: null },
-        goodScore,
-      ),
+      isRateDrift(130, {
+        sampleCount: 5,
+        avgUnitPrice: 100,
+        stddevUnitPrice: null,
+      }),
     ).toBe(false);
   });
 
-  it("does not fire when the line scorer didn't rank it 'low'", () => {
+  // PR10 C2 — divide-by-zero guard.
+  it("does not fire when avgUnitPrice is zero", () => {
     expect(
-      isRateDrift(
-        130,
-        { sampleCount: 5, avgUnitPrice: 100, stddevUnitPrice: 5 },
-        { ...goodScore, score: "medium" },
-      ),
+      isRateDrift(100, { sampleCount: 5, avgUnitPrice: 0, stddevUnitPrice: 5 }),
     ).toBe(false);
   });
 
-  it("fires above the variance threshold AND scorer = low", () => {
+  it("does not fire when avgUnitPrice is negative (defensive)", () => {
     expect(
-      isRateDrift(
-        100 * (1 + RATE_DRIFT_THRESHOLD + 0.01),
-        { sampleCount: 5, avgUnitPrice: 100, stddevUnitPrice: 5 },
-        goodScore,
-      ),
+      isRateDrift(100, { sampleCount: 5, avgUnitPrice: -10, stddevUnitPrice: 5 }),
+    ).toBe(false);
+  });
+
+  // PR10 C1 — the rule must actually fire at the documented minimum
+  // sample count, not the silently-higher one the scorer was forcing.
+  it("FIRES at exactly RATE_DRIFT_MIN_SAMPLES = 3 when σ-distance is material", () => {
+    expect(
+      isRateDrift(150, {
+        sampleCount: RATE_DRIFT_MIN_SAMPLES,
+        avgUnitPrice: 100,
+        stddevUnitPrice: 5,
+      }),
     ).toBe(true);
   });
 
-  it("does not fire at exactly the threshold (strict >)", () => {
+  it("does not fire on small-σ-distance drift even past the % threshold", () => {
+    // 20% drift but σ-distance only 1.0 — within normal variance range.
     expect(
-      isRateDrift(
-        100 * (1 + RATE_DRIFT_THRESHOLD),
-        { sampleCount: 5, avgUnitPrice: 100, stddevUnitPrice: 5 },
-        goodScore,
-      ),
+      isRateDrift(120, {
+        sampleCount: 5,
+        avgUnitPrice: 100,
+        stddevUnitPrice: 20,
+      }),
+    ).toBe(false);
+  });
+
+  it("fires above the variance threshold AND σ-distance > 1.5", () => {
+    expect(
+      isRateDrift(100 * (1 + RATE_DRIFT_THRESHOLD + 0.05), {
+        sampleCount: 5,
+        avgUnitPrice: 100,
+        stddevUnitPrice: 5,
+      }),
+    ).toBe(true);
+  });
+
+  it("does not fire at exactly the variance threshold (strict >)", () => {
+    expect(
+      isRateDrift(100 * (1 + RATE_DRIFT_THRESHOLD), {
+        sampleCount: 5,
+        avgUnitPrice: 100,
+        stddevUnitPrice: 5,
+      }),
     ).toBe(false);
   });
 });

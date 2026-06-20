@@ -101,26 +101,40 @@ export function scoreLine(
 /**
  * Phase 9 — D3 rate-drift threshold helpers.
  *
- * Rate drift fires as a `unit_price_drift` warning when:
- *   - stats.sampleCount >= RATE_DRIFT_MIN_SAMPLES,
- *   - stddev is non-null, and
- *   - |unit_price − avg| / avg > RATE_DRIFT_THRESHOLD,
- *   - AND the per-line scorer above ranked the line "low".
+ * PR10 — the prior implementation required `scoreResult.score === "low"`,
+ * but scoreLine forces "medium" whenever sampleCount < 5. Net effect:
+ * RATE_DRIFT_MIN_SAMPLES = 3 was dead — drift could never fire on
+ * 3–4-sample vendors. This decouples the gate from the scorer's verdict
+ * and checks the underlying conditions directly:
  *
- * The "low" gate means we never flag a line the scorer was unwilling to
- * call out — keeps the validator and the UI confidence column in sync.
+ *   1. sampleCount >= RATE_DRIFT_MIN_SAMPLES — enough history to compare
+ *   2. avgUnitPrice > 0                        — avoids divide-by-zero (C2)
+ *   3. stddev is non-null                      — we can score σ-distance
+ *   4. |unit_price − avg| / avg > RATE_DRIFT_THRESHOLD — material % drift
+ *   5. σ-distance > 1.5                        — statistically material
+ *
+ * Conditions 4+5 together ensure we don't fire on minor-but-statistically
+ * notable noise (e.g. 16% drift on a series with $1 stddev) nor on
+ * large-but-statistically-explainable swings (e.g. 50% drift on a vendor
+ * whose σ spans both ends).
+ *
+ * The scorer is no longer in the loop; the validator and the UI can
+ * disagree, which is fine — the confidence column is a reviewer hint,
+ * the drift finding is a deterministic rule.
  */
 export const RATE_DRIFT_THRESHOLD = 0.15;
 export const RATE_DRIFT_MIN_SAMPLES = 3;
+const RATE_DRIFT_STDDEV_DISTANCE = 1.5;
 
-export function isRateDrift(
-  unitPrice: number,
-  stats: LinePricingStats,
-  scoreResult: LineConfidenceResult,
-): boolean {
+export function isRateDrift(unitPrice: number, stats: LinePricingStats): boolean {
   if (stats.sampleCount < RATE_DRIFT_MIN_SAMPLES) return false;
+  if (stats.avgUnitPrice <= 0) return false; // PR10 C2 — divide-by-zero guard
   if (stats.stddevUnitPrice === null) return false;
-  if (scoreResult.score !== "low") return false;
+  if (stats.stddevUnitPrice <= 0) return false;
+
   const pctDrift = Math.abs(unitPrice - stats.avgUnitPrice) / stats.avgUnitPrice;
-  return pctDrift > RATE_DRIFT_THRESHOLD;
+  if (pctDrift <= RATE_DRIFT_THRESHOLD) return false;
+
+  const sigmaDistance = Math.abs(unitPrice - stats.avgUnitPrice) / stats.stddevUnitPrice;
+  return sigmaDistance > RATE_DRIFT_STDDEV_DISTANCE;
 }
