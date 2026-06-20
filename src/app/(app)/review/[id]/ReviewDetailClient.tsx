@@ -271,9 +271,27 @@ export default function ReviewDetailClient(props: Props) {
         <div className="rounded-md border border-gray-200 bg-white p-4">
           <div className="mb-3 flex items-center justify-between">
             <h2 className="text-sm font-medium text-gray-700">Extracted fields</h2>
-            <span className="rounded bg-gray-100 px-2 py-0.5 text-xs uppercase tracking-wide text-gray-700">
-              {form.reviewStatus}
-            </span>
+            <div className="flex items-center gap-2">
+              {/* Phase 11 — D4: Audit-ready evidence packet download.
+                  Surfaces once the invoice is in a terminal post-review
+                  state. The assemble job runs async, so a fresh approval
+                  may show the link before the packet is sealed — the GET
+                  endpoint returns 404 with a "not_ready" body in that
+                  window. */}
+              {(form.reviewStatus === "approved" ||
+                form.reviewStatus === "exported") && (
+                <a
+                  href={`/api/ap/exports/evidence/${props.invoice.id}`}
+                  className="rounded border border-gray-300 px-2 py-0.5 text-xs text-gray-700 hover:bg-gray-50"
+                  title="Download the audit-ready evidence packet"
+                >
+                  Evidence packet
+                </a>
+              )}
+              <span className="rounded bg-gray-100 px-2 py-0.5 text-xs uppercase tracking-wide text-gray-700">
+                {form.reviewStatus}
+              </span>
+            </div>
           </div>
 
           <div className="grid grid-cols-2 gap-3">

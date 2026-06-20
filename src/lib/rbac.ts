@@ -13,7 +13,15 @@ export type Permission =
   | "invoice.approve"
   | "invoice.reject"
   | "invoice.export"
-  | "invoice.read";
+  | "invoice.read"
+  /**
+   * Phase 11 — F02 Stop Work Authority. Permits the holder to approve
+   * an invoice despite blocking validation findings, provided a
+   * justification ≥ 20 chars is supplied. Owner + admin only — a
+   * reviewer can approve clean invoices but cannot override the
+   * validation gate.
+   */
+  | "invoice.override";
 
 const MATRIX: Record<UserRole, ReadonlySet<Permission>> = {
   owner: new Set<Permission>([
@@ -26,6 +34,7 @@ const MATRIX: Record<UserRole, ReadonlySet<Permission>> = {
     "invoice.reject",
     "invoice.export",
     "invoice.read",
+    "invoice.override",
   ]),
   admin: new Set<Permission>([
     "clients.manage",
@@ -35,6 +44,7 @@ const MATRIX: Record<UserRole, ReadonlySet<Permission>> = {
     "invoice.reject",
     "invoice.export",
     "invoice.read",
+    "invoice.override",
   ]),
   reviewer: new Set<Permission>([
     "invoice.upload",

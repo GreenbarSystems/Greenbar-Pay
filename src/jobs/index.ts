@@ -10,6 +10,7 @@ import { handleValidateExtractedInvoice } from "./validateExtractedInvoice";
 import { handleExportInvoices } from "./exportInvoices";
 import { handleRecomputeVendorProfile } from "./recomputeVendorProfile";
 import { handleGenerateBriefingCard } from "./generateBriefingCard";
+import { handleAssembleEvidencePacket } from "./assembleEvidencePacket";
 
 type Handler<N extends keyof JobPayloads> = (
   job: PgBoss.Job<JobPayloads[N]>,
@@ -61,5 +62,13 @@ export const HANDLERS: Array<{
     name: JOB.generateBriefingCard,
     options: { teamSize: 4, teamConcurrency: 1 },
     handler: handleGenerateBriefingCard as Handler<keyof JobPayloads>,
+  },
+  {
+    // Phase 11 — D4. Idempotent via UNIQUE (org, invoiceId); duplicate
+    // delivery becomes a no-op INSERT. No LLM dispatch — just a
+    // Promise.all snapshot + hash + insert.
+    name: JOB.assembleEvidencePacket,
+    options: { teamSize: 4, teamConcurrency: 4 },
+    handler: handleAssembleEvidencePacket as Handler<keyof JobPayloads>,
   },
 ];

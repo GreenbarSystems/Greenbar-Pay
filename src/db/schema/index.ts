@@ -15,3 +15,5 @@ export * from "./emailMessages";
 export * from "./emailAttachments";
 export * from "./auditEvents";
 export * from "./apiIdempotencyKeys";
+export * from "./evidencePackets";
+export * from "./invoiceOverrideLog";
