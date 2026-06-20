@@ -446,10 +446,28 @@ export async function POST(
             findingCount: Array.isArray(latest.errorsJson)
               ? (latest.errorsJson as unknown[]).length
               : 0,
-            // SoD check outcome — recorded so audit can prove the
-            // separation-of-duties guard ran and passed.
-            sodChecked: true,
-            sodPassed: true,
+            // PR18 — SoD outcome split into three states so the audit
+            // log doesn't lie. Previously we recorded sodPassed=true
+            // unconditionally, even when createdBy was null (email-
+            // ingested documents): the gate short-circuited to "pass"
+            // because `null === userId` is false, but the audit said
+            // the control ran successfully. CPA-firm intake is mostly
+            // email, so this defeated the maker-checker control for
+            // the primary intake channel.
+            //
+            // States:
+            //   "passed"       — uploader present AND ≠ approver
+            //   "self_uploader"— uploader === approver (rejected earlier
+            //                    with sod_denied event)
+            //   "skipped_no_uploader"
+            //                  — document has no human uploader
+            //                    (email ingest); the control is not
+            //                    applicable rather than passed
+            sodChecked: parentDoc?.createdBy !== null && parentDoc?.createdBy !== undefined,
+            sodResult:
+              parentDoc?.createdBy === null || parentDoc?.createdBy === undefined
+                ? "skipped_no_uploader"
+                : "passed",
             vendorBootstrap: bootstrap,
             uploaderId: parentDoc?.createdBy ?? null,
             // Phase 11 F02 — link the override row so an audit query

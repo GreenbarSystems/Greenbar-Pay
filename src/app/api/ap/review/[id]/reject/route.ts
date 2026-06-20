@@ -175,8 +175,16 @@ export async function POST(
           ),
           metadataJson: {
             reason: body.reason,
-            sodChecked: true,
-            sodPassed: true,
+            // PR18 — mirrors approve.route.ts. sodChecked is true only
+            // when the document actually has a human uploader to check
+            // against. Email-ingested docs (createdBy=null) record
+            // sodResult="skipped_no_uploader" — the maker-checker
+            // control is not applicable rather than silently passing.
+            sodChecked: parentDoc?.createdBy !== null && parentDoc?.createdBy !== undefined,
+            sodResult:
+              parentDoc?.createdBy === null || parentDoc?.createdBy === undefined
+                ? "skipped_no_uploader"
+                : "passed",
             uploaderId: parentDoc?.createdBy ?? null,
           },
         });

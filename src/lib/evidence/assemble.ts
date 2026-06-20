@@ -66,7 +66,7 @@ export async function assembleEvidenceManifest(
     .limit(1);
   if (!doc) return null;
 
-  const [lines, latestValidation, briefingCard, approveEvent, overrideRow] =
+  const [lines, latestValidation, latestActiveBriefing, approveEvent, overrideRow] =
     await Promise.all([
       tx
         .select()
@@ -131,6 +131,32 @@ export async function assembleEvidenceManifest(
   // until either the approve event commits or operator intervention
   // surfaces the issue.
   if (!approveEvent) return null;
+
+  // PR18 — briefing pin desync race. The parallel fan-out above loads
+  // the latest-active briefing card via `WHERE supersededAt IS NULL`.
+  // But: generateBriefingCard's persist tx never re-checks
+  // reviewStatus after the LLM dispatch returns, so a regenerate that
+  // started before approve can supersede the original card and insert
+  // a new one AFTER approve commits. The approve route pins
+  // activeBriefingCardId in invoice.approved.metadataJson — bind the
+  // manifest to THAT id, not whichever card happens to be active at
+  // job-run time. This makes the evidence packet match the card the
+  // approver actually saw, which is the §D4 invariant.
+  const pinnedBriefingCardId =
+    typeof approveEvent.metadataJson === "object" &&
+    approveEvent.metadataJson !== null &&
+    "activeBriefingCardId" in approveEvent.metadataJson
+      ? (approveEvent.metadataJson.activeBriefingCardId as string | null)
+      : null;
+  let briefingCard = latestActiveBriefing;
+  if (pinnedBriefingCardId && briefingCard?.id !== pinnedBriefingCardId) {
+    const [pinnedCard] = await tx
+      .select()
+      .from(briefingCards)
+      .where(eq(briefingCards.id, pinnedBriefingCardId))
+      .limit(1);
+    if (pinnedCard) briefingCard = pinnedCard;
+  }
 
   // Resolve the LLM run that produced the briefing card (PR12 H1 chain).
   let llmRun: typeof llmRuns.$inferSelect | undefined;
