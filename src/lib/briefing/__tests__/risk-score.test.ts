@@ -8,6 +8,8 @@ const baseInput = {
   vendorDuplicateCount: 0,
   textQualityLow: false,
   vendorWarmingUp: false,
+  rateDriftCount: 0,
+  hasNewLineItem: false,
 };
 
 describe("computeRiskScore", () => {
@@ -54,10 +56,46 @@ describe("computeRiskScore", () => {
       vendorDuplicateCount: 1,
       textQualityLow: true,
       vendorWarmingUp: true,
+      rateDriftCount: 0,
+      hasNewLineItem: false,
     });
     // 30 + 12 + 12 + 10 + 8 + 6 = 78
     expect(r.score).toBe(78);
     expect(r.factors).toHaveLength(6);
+  });
+
+  // Phase 9 — D3 / F06 cases.
+  it("one rate-drift line adds 8", () => {
+    const r = computeRiskScore({ ...baseInput, rateDriftCount: 1 });
+    expect(r.score).toBe(8);
+    expect(r.factors[0].code).toBe("rate_drift");
+  });
+
+  it("rate-drift count caps at 3 lines (24 max)", () => {
+    const r = computeRiskScore({ ...baseInput, rateDriftCount: 10 });
+    expect(r.score).toBe(24);
+    expect(r.factors[0].note).toContain("10 line items");
+  });
+
+  it("new line item adds 5 once", () => {
+    const r = computeRiskScore({ ...baseInput, hasNewLineItem: true });
+    expect(r.score).toBe(5);
+    expect(r.factors[0].code).toBe("new_line_item");
+  });
+
+  it("rate drift + new line item compose with other factors", () => {
+    const r = computeRiskScore({
+      ...baseInput,
+      warningFindingCount: 1, // 6
+      rateDriftCount: 2, // 16
+      hasNewLineItem: true, // 5
+    });
+    expect(r.score).toBe(27);
+    expect(r.factors.map((f) => f.code)).toEqual([
+      "rate_drift",
+      "warning_findings",
+      "new_line_item",
+    ]);
   });
 });
 

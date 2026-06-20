@@ -21,6 +21,20 @@ import { z } from "zod";
 
 export const AnomalyFlagSeverity = z.enum(["info", "warning", "critical"]);
 
+/**
+ * Phase 9 — F07: each step of the evidence chain. Labels are loose by
+ * design (we don't want to force the model into a slot when the
+ * underlying validation finding doesn't supply one), but the canonical
+ * labels the prompt requests are: Evidence, This invoice, Trend signal,
+ * Contract reference, Stddev distance, Recommendation. Length caps
+ * mirror the existing message field so a long chain can't blow past
+ * the briefing-card budget.
+ */
+const EvidenceStep = z.object({
+  label: z.string().min(1).max(48),
+  detail: z.string().min(1).max(280),
+});
+
 const AnomalyFlag = z.object({
   code: z
     .string()
@@ -32,6 +46,13 @@ const AnomalyFlag = z.object({
     .min(1)
     .max(280)
     .describe("Plain-English explanation an approver can act on."),
+  /**
+   * Phase 9 — F07: structured reasoning trail per anomaly. Optional so
+   * pre-Phase-9 briefing rows remain decodable, but the prompt now
+   * requires it on every flag the model emits. Capped at 6 steps so a
+   * runaway model can't unroll a vendor profile into prose here.
+   */
+  evidenceChain: z.array(EvidenceStep).max(6).optional(),
 });
 
 export const BriefingCardSchema = z.object({
@@ -103,6 +124,19 @@ export const BRIEFING_TOOL_JSON_SCHEMA = {
           message: {
             type: "string",
             description: "Plain-English explanation an approver can act on.",
+          },
+          evidenceChain: {
+            type: "array",
+            description:
+              "Reasoning trail an approver can audit. Labelled steps grounded in the inputs.",
+            items: {
+              type: "object",
+              properties: {
+                label: { type: "string" },
+                detail: { type: "string" },
+              },
+              required: ["label", "detail"],
+            },
           },
         },
         required: ["code", "severity", "message"],
