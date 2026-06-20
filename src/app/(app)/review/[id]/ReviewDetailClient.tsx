@@ -424,13 +424,20 @@ export default function ReviewDetailClient(props: Props) {
         {/* Phase 10 — D5: Pre-Approval Coaching. Rendered when the
             briefing produced any prompts; absent otherwise (no need to
             draw an empty panel). */}
-        {props.briefingCard && props.briefingCard.coachingPrompts.length > 0 && (
-          <CoachingPanel
-            invoiceId={props.invoice.id}
-            briefingCardId={props.briefingCard.id}
-            prompts={props.briefingCard.coachingPrompts}
-          />
-        )}
+        {/* PR16 M3 — coaching is an approver nudge; viewer/clerk roles
+            with invoice.read have no action to take so showing them
+            financial-impact figures (and the dismiss action that fires
+            an audit event under their id) is information overshare.
+            Analogous to PR11 H7's confidenceReason gate. */}
+        {canApprove &&
+          props.briefingCard &&
+          props.briefingCard.coachingPrompts.length > 0 && (
+            <CoachingPanel
+              invoiceId={props.invoice.id}
+              briefingCardId={props.briefingCard.id}
+              prompts={props.briefingCard.coachingPrompts}
+            />
+          )}
 
         {/* ── Vendor snapshot (Phase 7 — D1) ──────────────────────── */}
         {props.vendorProfile ? (
