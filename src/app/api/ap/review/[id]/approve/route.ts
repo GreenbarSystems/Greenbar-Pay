@@ -339,6 +339,13 @@ export async function POST(
         // if the active briefing race produced a null card id, the
         // score / version / hash become unrecoverable from the audit
         // log alone.
+        // PR17 M-Approve-LLM-Lookup — fold the llm_runs lookup into the
+        // briefing card select with a leftJoin. The prior PR12 H1
+        // sequence (select briefing, then conditionally select llm_run
+        // by id) ran two serial round trips on the user-facing approve
+        // hot path. The leftJoin gives the same result in one round
+        // trip and leaves the schemas decoupled (briefingCards.llmRunId
+        // is still the only FK; the join is a read-time concern).
         const [activeBriefing] = await tx
           .select({
             id: briefingCards.id,
@@ -346,8 +353,10 @@ export async function POST(
             llmRunId: briefingCards.llmRunId,
             riskScore: briefingCards.riskScore,
             riskScoreVersion: briefingCards.riskScoreVersion,
+            llmInputHash: llmRuns.inputHash,
           })
           .from(briefingCards)
+          .leftJoin(llmRuns, eq(llmRuns.id, briefingCards.llmRunId))
           .where(
             and(
               eq(briefingCards.extractedInvoiceId, params.id),
@@ -356,20 +365,7 @@ export async function POST(
           )
           .orderBy(desc(briefingCards.createdAt))
           .limit(1);
-
-        // PR12 H1 — pull inputHash from llm_runs separately. Joining
-        // briefing_cards → llm_runs in one query is cleaner but the
-        // pin step already has the briefing row; a second small lookup
-        // is fine and keeps the schema decoupled.
-        let llmInputHash: string | null = null;
-        if (activeBriefing?.llmRunId) {
-          const [run] = await tx
-            .select({ inputHash: llmRuns.inputHash })
-            .from(llmRuns)
-            .where(eq(llmRuns.id, activeBriefing.llmRunId))
-            .limit(1);
-          llmInputHash = run?.inputHash ?? null;
-        }
+        const llmInputHash = activeBriefing?.llmInputHash ?? null;
 
         // Phase 11 F02 — Stop Work Authority. Record the override
         // BEFORE the invoice.approved audit so the chain is:

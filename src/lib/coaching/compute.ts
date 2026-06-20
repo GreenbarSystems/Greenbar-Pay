@@ -215,24 +215,37 @@ export function computeCoachingPrompts(
     });
   }
 
-  // 4. unusual_total — invoice total materially above vendor's typical.
+  // 4. unusual_total — invoice total materially different from vendor's
+  // typical. PR17 I1 — the prior check fired only above the multiplier,
+  // missing credit-memo reversals (large negative totals). Comparing
+  // |total| catches both directions; the message specialises by sign.
   if (
     invoice.total !== null &&
     vendorProfile &&
     vendorProfile.invoiceCount >= UNUSUAL_TOTAL_MIN_INVOICES
   ) {
     const avg = parseNumeric(vendorProfile.avgInvoiceAmount);
-    if (avg !== null && avg > 0 && invoice.total > avg * UNUSUAL_TOTAL_MULTIPLIER) {
-      const pct = Math.round(((invoice.total - avg) / avg) * 100);
+    if (
+      avg !== null &&
+      avg > 0 &&
+      Math.abs(invoice.total) > avg * UNUSUAL_TOTAL_MULTIPLIER
+    ) {
+      const pct = Math.round(((Math.abs(invoice.total) - avg) / avg) * 100);
+      const isCredit = invoice.total < 0;
       prompts.push({
         code: "unusual_total",
         severity: "info",
-        message: `Total is about ${pct}% above this vendor's typical invoice average.`,
+        message: isCredit
+          ? `Credit/reversal of about ${pct}% above this vendor's typical invoice size.`
+          : `Total is about ${pct}% above this vendor's typical invoice average.`,
+        // Negative dollarImpact mirrors the loss-framing pattern from
+        // early_payment_discount — money flowing OUT vs. money flowing IN.
         dollarImpact: round2(invoice.total - avg),
         context: {
           invoiceTotal: invoice.total,
           avgInvoiceAmount: round2(avg),
           variancePct: pct,
+          isCredit,
         },
       });
     }
@@ -283,8 +296,19 @@ function round2(n: number): number {
  * and "net 30" and " Net  30 " all collapse to "net 30". Returns the
  * raw normalized form; the caller decides whether identity matters.
  */
+/**
+ * PR17 I3 — collapse whitespace *around* the "net" token too so
+ * "net30" (no space, common from OCR), "Net  30 " (multiple spaces),
+ * and "NET 30" all canonicalise to "net 30". Without this, a
+ * "net30" invoice against an on-file "Net 30" was producing a
+ * spurious terms_mismatch coaching prompt.
+ */
 function normalizeTerms(s: string): string {
-  return s.trim().toLowerCase().replace(/\s+/g, " ");
+  return s
+    .trim()
+    .toLowerCase()
+    .replace(/net\s*(\d)/g, "net $1")
+    .replace(/\s+/g, " ");
 }
 
 function termsEqual(a: string, b: string): boolean {
@@ -296,6 +320,11 @@ function termsEqual(a: string, b: string): boolean {
  * the string isn't of the form "Net N" (e.g. "Due on receipt", custom
  * arrangements). Used to compute the days-different signal for the
  * terms mismatch prompt.
+ *
+ * PR17 I3 — the prior regex required `\s+` between "net" and the
+ * digits, so "net30" returned null and the rule fell back to the
+ * generic message. The normalize step above now inserts the space,
+ * so the same regex works for both forms.
  */
 function parseNetDays(s: string): number | null {
   const m = normalizeTerms(s).match(/(?:^|\b)net\s+(\d{1,3})\b/);

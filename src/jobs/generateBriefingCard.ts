@@ -406,11 +406,17 @@ export async function handleGenerateBriefingCard(
         paymentTerms: prep.invoice.paymentTerms,
         invoiceDate: prep.invoice.invoiceDate,
         dueDate: prep.invoice.dueDate,
-        // Extraction doesn't separate discount % from amount today;
-        // the discount column carries either form per the prompt's
-        // free-text interpretation. Leave the explicit early-payment
-        // discount coaching trigger inert until the extraction schema
-        // grows a typed discount_pct field.
+        // TODO(extraction-schema): the early_payment_discount coaching
+        // trigger in src/lib/coaching/compute.ts is structurally dead
+        // until extraction produces a typed discount_pct. Today
+        // extracted_invoices.discount carries either a % or a $
+        // amount in a single numeric column, depending on the
+        // model's free-text interpretation, so we cannot safely
+        // route it to discountPct. The trigger's logic, schema, and
+        // tests stand; flipping it on is a one-line change after the
+        // schema lands. Left wired with discountPct=null so the
+        // structural dead-path is explicit rather than buried in
+        // test coverage.
         discountPct: null,
         discountAmount: numericOrNull(prep.invoice.discount),
       },

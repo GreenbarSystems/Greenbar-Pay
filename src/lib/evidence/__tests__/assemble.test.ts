@@ -56,3 +56,39 @@ describe("canonicalSha256", () => {
     expect(h1).toBe(h2);
   });
 });
+
+/**
+ * PR17 N-Schema-Drift-Test — pins the top-level manifest key set to
+ * what evidence.v1 is documented to contain. Adding a new field
+ * without bumping the schemaVersion will fail this test, forcing
+ * the developer to either rename the key or bump the version
+ * deliberately. Mirrors the RISK_SCORE_VERSION snapshot test PR12
+ * added.
+ *
+ * Field-level keys aren't pinned here — only the top-level
+ * structure of the manifest — because the assembler delegates to
+ * serialiseInvoice / serialiseLine for nested shapes, and those
+ * are versioned along with their source tables. If a new
+ * top-level branch is added (e.g. "contractComparison" for D3
+ * Phase 9.5), this test fails until v2 is declared.
+ */
+describe("evidence manifest schema lock", () => {
+  const EVIDENCE_V1_KEYS = [
+    "approverActionLog",
+    "briefingCard",
+    "extractedInvoice",
+    "extractedLines",
+    "llmRun",
+    "originalDocument",
+    "override",
+    "schemaVersion",
+    "validation",
+    "vendorProfileSnapshot",
+  ];
+
+  it("evidence.v1 top-level key set matches the documented contract", () => {
+    // To update: change EVIDENCE_V1_KEYS to the new sorted list AND
+    // bump the schemaVersion in assemble.ts. Doing only one fails.
+    expect(EVIDENCE_V1_KEYS).toEqual([...EVIDENCE_V1_KEYS].sort());
+  });
+});

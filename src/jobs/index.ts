@@ -67,8 +67,17 @@ export const HANDLERS: Array<{
     // Phase 11 — D4. Idempotent via UNIQUE (org, invoiceId); duplicate
     // delivery becomes a no-op INSERT. No LLM dispatch — just a
     // Promise.all snapshot + hash + insert.
+    //
+    // PR17 H-Pool — teamConcurrency reduced from 4 to 2. The worker
+    // pool is sized at max=10 (src/db/internal/rawClient.ts); with
+    // validate-extracted-invoice running at 4×4=16 and this job
+    // previously also at 4×4=16, an approval burst could push
+    // pool demand to ~40 against a 10-connection pool, starving
+    // other handlers. The job is I/O-light (a handful of selects
+    // + insert), so high concurrency wasn't buying throughput
+    // — just contention.
     name: JOB.assembleEvidencePacket,
-    options: { teamSize: 4, teamConcurrency: 4 },
+    options: { teamSize: 4, teamConcurrency: 2 },
     handler: handleAssembleEvidencePacket as Handler<keyof JobPayloads>,
   },
 ];
