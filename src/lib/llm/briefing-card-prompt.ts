@@ -21,7 +21,7 @@ import { BRIEFING_TOOL_JSON_SCHEMA } from "./briefing-card-schema";
 import type { BuiltPrompt } from "./prompt";
 
 export const BRIEFING_PROMPT_NAME = "briefing-card";
-export const BRIEFING_PROMPT_VERSION = "2026-06-20";
+export const BRIEFING_PROMPT_VERSION = "2026-06-20-pr11";
 
 export const BRIEFING_SYSTEM_PROMPT = `You generate an approver-facing Briefing Card for an accounts-payable invoice.
 
@@ -59,9 +59,13 @@ Output the emit_briefing tool exactly once with:
     "Contract reference" — cite contract_rate when present in inputs
     "Stddev distance" — only when stats include stddev; quote σ
     "Recommendation"  — one sentence: what the approver should do next
-  Each detail must use specific numbers (e.g. "Last 8 invoices averaged
-  $245.00"), not generalisations. The PII rules above still apply —
-  never quote the vendor name or invoice number in chain details.
+  Each detail must use statistical descriptors (e.g. "Last 8 invoices
+  averaged near the historical mean", "within 1 standard deviation",
+  "above 80th percentile") rather than exact dollar figures. The PII
+  rules above still apply — never quote the vendor name, invoice
+  number, or exact dollar amounts in chain details. Sample counts and
+  percentage drifts ARE OK ("8 prior samples", "+18%"); raw currency
+  amounts are NOT.
 - deltaSummary: ≤ 500 chars. What changed vs the prior invoice
   (amount, terms, line items, due date). Empty string if no prior
   invoice was supplied.
@@ -96,8 +100,16 @@ export interface BriefingPromptInput {
   priorInvoice: BriefingPriorInvoice | null;
   /** Deterministic 0–100 risk score the LLM is asked to justify. */
   riskScore: number;
-  /** Optional contributing factors so the prose can reference them. */
-  riskFactors: Array<{ code: string; weight: number; note?: string }>;
+  /**
+   * Contributing factors so the prose can reference them.
+   *
+   * PR11 M9 — `note` (e.g. "8 line items priced materially above vendor
+   * history") was omitted: it crosses the Anthropic boundary as
+   * per-vendor behavioural signal with no offsetting benefit. The
+   * builder maps factor codes to canonical descriptions in the prompt
+   * itself; we don't need the LLM to paraphrase a free-text note.
+   */
+  riskFactors: Array<{ code: string; weight: number }>;
 }
 
 export interface BriefingInvoice {
