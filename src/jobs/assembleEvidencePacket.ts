@@ -40,13 +40,23 @@ export async function handleAssembleEvidencePacket(
     await withOrgAsWorker(organizationId, async (tx) => {
       const assembled = await assembleEvidenceManifest(tx, extractedInvoiceId);
       if (!assembled) {
-        // The invoice or document was deleted between approve and the
-        // job firing — extremely rare given the FK chain. Nothing to
-        // do; let the retry policy give up.
-        console.warn(
-          `[assemble-evidence-packet] no artifacts for invoice=${extractedInvoiceId}; skipping`,
+        // PR14 C-Null-Approver — assembler returns null when ANY of
+        // (a) the extracted invoice is gone, (b) the document is gone,
+        // (c) the invoice.approved audit event hasn't landed yet.
+        //
+        // For (a)/(b) the FK chain protects us; only an admin manual
+        // delete could trigger it and the job giving up is fine.
+        //
+        // For (c) this can happen if the approve route's enqueue ran
+        // before the audit event was committed (race-impossible in
+        // practice because both are in the same tx, but defensive). We
+        // THROW so pg-boss retries with backoff rather than silently
+        // skipping — the alternative is a sealed packet with no
+        // approver attribution, which breaks the §D4 chain. An
+        // operator inspecting failed jobs will see the cause.
+        throw new Error(
+          `[assemble-evidence-packet] artifacts not ready for invoice=${extractedInvoiceId}; retrying`,
         );
-        return;
       }
 
       const [inserted] = await tx

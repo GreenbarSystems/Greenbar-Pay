@@ -122,6 +122,16 @@ export async function assembleEvidenceManifest(
         .then((r) => r[0]),
     ]);
 
+  // PR14 C-Null-Approver — refuse to seal a packet when the approval
+  // attestation can't be resolved. Without this guard the assembler
+  // silently produces a packet with sealed_by_user_id=null and
+  // approverActionLog=null — sealing successful, audit event fires,
+  // BUT the §D4 "who approved" link is broken with no operator signal.
+  // Returning null here makes the job throw (re-enqueue with backoff)
+  // until either the approve event commits or operator intervention
+  // surfaces the issue.
+  if (!approveEvent) return null;
+
   // Resolve the LLM run that produced the briefing card (PR12 H1 chain).
   let llmRun: typeof llmRuns.$inferSelect | undefined;
   if (briefingCard?.llmRunId) {
