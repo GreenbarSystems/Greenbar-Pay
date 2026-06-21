@@ -22,13 +22,10 @@ declare module "next-auth" {
   }
 }
 
-declare module "next-auth/jwt" {
-  interface JWT {
-    userId: string;
-    organizationId: string;
-    role: UserRole;
-  }
-}
+// Typecheck-sweep — next-auth v5 collapsed next-auth/jwt into next-auth
+// itself, so `declare module "next-auth/jwt"` no longer resolves.
+// The session callback below now casts each token field explicitly
+// rather than relying on an augmented JWT shape.
 
 export const { handlers, auth, signIn, signOut } = NextAuth({
   session: { strategy: "jwt" },
@@ -85,9 +82,12 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
       return token;
     },
     async session({ session, token }) {
-      session.user.id = token.userId;
-      session.user.organizationId = token.organizationId;
-      session.user.role = token.role;
+      // Token fields are typed as unknown after the next-auth/jwt
+      // augmentation removal — cast through the shape the jwt
+      // callback above guarantees we wrote.
+      session.user.id = token.userId as string;
+      session.user.organizationId = token.organizationId as string;
+      session.user.role = token.role as UserRole;
       return session;
     },
   },

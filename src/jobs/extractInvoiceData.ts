@@ -34,6 +34,7 @@ import {
   dispatchInvoiceExtraction,
   MAX_INPUT_CHARS,
   type DispatchOutcome,
+  type InvoiceExtractionResult,
 } from "@/lib/llm";
 import { scrub, scrubError } from "@/lib/llm/scrub";
 import type { JobPayloads } from "@/lib/queue";
@@ -138,7 +139,7 @@ export async function handleExtractInvoiceData(
 async function persistOutcome(
   organizationId: string,
   documentId: string,
-  outcome: DispatchOutcome,
+  outcome: DispatchOutcome<InvoiceExtractionResult>,
   charCount: number,
 ): Promise<void> {
   await withOrgAsWorker(organizationId, async (tx) => {
@@ -339,7 +340,7 @@ async function persistOutcome(
 }
 
 function mapOutcomeToRunStatus(
-  outcome: DispatchOutcome,
+  outcome: DispatchOutcome<InvoiceExtractionResult>,
 ): "succeeded" | "schema_failed" | "provider_error" | "text_too_large" | "quota_exceeded" | "circuit_open" {
   switch (outcome.kind) {
     case "succeeded":
@@ -356,5 +357,13 @@ function mapOutcomeToRunStatus(
       return "circuit_open";
     case "non_compliant_model":
       return "provider_error";
+    default:
+      // TS doesn't always narrow the discriminated union to never when
+      // the union has many variants — add an exhaustive default to
+      // satisfy the no-implicit-return check. If a new kind is added,
+      // this throws at runtime so the gap is loud.
+      throw new Error(
+        `unhandled DispatchOutcome kind: ${(outcome as { kind: string }).kind}`,
+      );
   }
 }

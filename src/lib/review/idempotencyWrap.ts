@@ -11,12 +11,19 @@ import {
   writeIdempotencyKey,
 } from "@/lib/idempotency";
 
-export async function withIdempotency<T>(
+/**
+ * Typecheck-sweep — handler return type widened from `{ body: T }` to
+ * `{ body: unknown }`. The prior generic forced TS to infer T from the
+ * first return branch in each route handler, then rejected later
+ * branches that emit different error/success shapes. The body is
+ * always JSON-serialised; the strict generic was buying nothing.
+ */
+export async function withIdempotency(
   req: Request,
   organizationId: string,
   path: string,
   body: unknown,
-  handler: () => Promise<{ status: number; body: T }>,
+  handler: () => Promise<{ status: number; body: unknown }>,
   method: string = req.method,
 ): Promise<NextResponse> {
   const key = req.headers.get("Idempotency-Key");

@@ -83,7 +83,15 @@ export async function dispatchAnthropic<T>(
       model: input.apiModelId,
       max_tokens: 4096,
       system: systemPrompt,
-      tools: [input.prompt.tool],
+      // Typecheck-sweep — Anthropic SDK 0.32+ tightened the Tool.input_
+      // schema type to require literal `type: "object"` plus the JSON-
+      // Schema shape. Our BuiltPrompt.tool.input_schema is intentionally
+      // typed as the looser Record<string, unknown> so it can carry any
+      // of the Phase 7/8/9 schemas without coupling prompt.ts to the
+      // SDK. Cast here at the call site rather than tightening the
+      // BuiltPrompt type — the schemas we build are guaranteed
+      // JSON-Schema objects by construction.
+      tools: [input.prompt.tool] as Parameters<typeof client.messages.create>[0]["tools"],
       // Force the model to use the tool — no chatter, no free text.
       tool_choice: { type: "tool", name: input.prompt.tool.name },
       messages: [{ role: "user", content: input.prompt.userText }],

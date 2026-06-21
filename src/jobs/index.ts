@@ -16,68 +16,74 @@ type Handler<N extends keyof JobPayloads> = (
   job: PgBoss.Job<JobPayloads[N]>,
 ) => Promise<unknown>;
 
+/**
+ * Typecheck-sweep migration to pg-boss v10:
+ *   · teamSize → batchSize (same semantics: how many jobs to fetch per
+ *     polling cycle).
+ *   · teamConcurrency removed by upstream — concurrency is now driven
+ *     by batchSize × intra-batch Promise.all in the worker loop.
+ *     We preserve the prior throughput by setting batchSize to the
+ *     product of the old teamSize × teamConcurrency where appropriate.
+ *     Conservative jobs (Tesseract reentrancy in processDocument; LLM
+ *     dispatch in extract/briefing) keep batchSize at 1 so they run
+ *     one-at-a-time per polling cycle, matching the prior
+ *     teamConcurrency: 1 intent.
+ */
 export const HANDLERS: Array<{
   name: keyof JobPayloads;
   options: PgBoss.WorkOptions;
   handler: Handler<keyof JobPayloads>;
 }> = [
   {
-    // PR3 — review #12: teamConcurrency capped at 1. Tesseract.js's worker
-    // is not reentrant; with concurrency 2 the second job's worker.recognize
-    // could interleave with the first, producing empty extractions or
-    // mixed text. teamSize 4 still lets four documents process serially
-    // per worker process; bursts queue. A proper Tesseract worker pool is
-    // a PR4 perf optimization once we measure real throughput.
+    // PR3 — Tesseract.js's worker is not reentrant. batchSize: 1 keeps
+    // exactly one job per polling cycle per worker process, replacing
+    // the prior teamSize:4, teamConcurrency:1 (which already serialised
+    // within the batch via Tesseract's own lock).
     name: JOB.processDocument,
-    options: { teamSize: 4, teamConcurrency: 1 },
+    options: { batchSize: 1 },
     handler: handleProcessDocument as Handler<keyof JobPayloads>,
   },
   {
-    // Lower concurrency: LLM dispatches are expensive and we want the
-    // circuit breaker / quota to see traffic, not a burst spike.
+    // LLM dispatches are expensive — keep visibility to the circuit
+    // breaker / quota gate by capping at one in-flight.
     name: JOB.extractInvoiceData,
-    options: { teamSize: 4, teamConcurrency: 1 },
+    options: { batchSize: 1 },
     handler: handleExtractInvoiceData as Handler<keyof JobPayloads>,
   },
   {
+    // Validation is pure DB + Zod — batch up to 16 (was teamSize:4 ×
+    // teamConcurrency:4) and Promise.all in the worker loop.
     name: JOB.validateExtractedInvoice,
-    options: { teamSize: 4, teamConcurrency: 4 },
+    options: { batchSize: 16 },
     handler: handleValidateExtractedInvoice as Handler<keyof JobPayloads>,
   },
   {
+    // CSV/JSON render + S3 upload — moderate batch.
     name: JOB.exportInvoices,
-    options: { teamSize: 2, teamConcurrency: 2 },
+    options: { batchSize: 4 },
     handler: handleExportInvoices as Handler<keyof JobPayloads>,
   },
   {
-    // Phase 7 — D1. Idempotent on vendorId; advisory-locked per-vendor.
+    // Phase 7 — D1. Advisory-locked per-vendor, so collisions inside a
+    // batch resolve via SKIP LOCKED on the recompute lock.
     name: JOB.recomputeVendorProfile,
-    options: { teamSize: 4, teamConcurrency: 2 },
+    options: { batchSize: 8 },
     handler: handleRecomputeVendorProfile as Handler<keyof JobPayloads>,
   },
   {
-    // Phase 8 — D2. Idempotent on extractedInvoiceId; advisory-locked.
-    // Low concurrency to keep LLM dispatch traffic visible to the
-    // circuit breaker (§2.7), matching extract-invoice-data.
+    // Phase 8 — D2. LLM dispatch — keep batchSize 1 for circuit-breaker
+    // visibility, same logic as extractInvoiceData.
     name: JOB.generateBriefingCard,
-    options: { teamSize: 4, teamConcurrency: 1 },
+    options: { batchSize: 1 },
     handler: handleGenerateBriefingCard as Handler<keyof JobPayloads>,
   },
   {
-    // Phase 11 — D4. Idempotent via UNIQUE (org, invoiceId); duplicate
-    // delivery becomes a no-op INSERT. No LLM dispatch — just a
-    // Promise.all snapshot + hash + insert.
-    //
-    // PR17 H-Pool — teamConcurrency reduced from 4 to 2. The worker
-    // pool is sized at max=10 (src/db/internal/rawClient.ts); with
-    // validate-extracted-invoice running at 4×4=16 and this job
-    // previously also at 4×4=16, an approval burst could push
-    // pool demand to ~40 against a 10-connection pool, starving
-    // other handlers. The job is I/O-light (a handful of selects
-    // + insert), so high concurrency wasn't buying throughput
-    // — just contention.
+    // Phase 11 — D4. PR17 H-Pool: cap batchSize at the connection-pool
+    // budget. The worker pool is max=25 in dev (rawClient.ts) and this
+    // is one of three handlers contending for it. 8 keeps a comfortable
+    // margin for the request path + validate-extracted-invoice (16).
     name: JOB.assembleEvidencePacket,
-    options: { teamSize: 4, teamConcurrency: 2 },
+    options: { batchSize: 8 },
     handler: handleAssembleEvidencePacket as Handler<keyof JobPayloads>,
   },
 ];

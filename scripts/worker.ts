@@ -7,6 +7,7 @@
  * container; pg-boss redelivers any uncommitted jobs.
  */
 import "dotenv/config";
+import type PgBoss from "pg-boss";
 import { getQueue, stopQueue } from "@/lib/queue";
 import { HANDLERS } from "@/jobs";
 import { isInboxEnabled, startInboxPoller, stopInboxPoller } from "@/lib/inbox/sqs";
@@ -17,22 +18,32 @@ async function main() {
   console.log(`[worker] connected; registering ${HANDLERS.length} handlers`);
 
   for (const { name, options, handler } of HANDLERS) {
-    await boss.work(name, options, async (job) => {
-      const started = Date.now();
-      try {
-        await handler(job);
-        console.log(
-          `[worker] ${name} job=${job.id} ok in ${Date.now() - started}ms`,
-        );
-      } catch (err) {
-        // §2.4 — never log raw payloads. Anthropic SDK + Drizzle error
-        // messages can echo request content; route through scrubError.
-        console.error(
-          `[worker] ${name} job=${job.id} failed in ${Date.now() - started}ms`,
-          scrubError(err),
-        );
-        throw err; // let pg-boss apply retry policy
-      }
+    // Typecheck-sweep — pg-boss v10's work callback always receives
+    // Job[] (even when batchSize is 1). Iterate and Promise.all so
+    // batched jobs run concurrently within a polling cycle, replacing
+    // the prior teamConcurrency knob. A single job's throw still bubbles
+    // up so pg-boss applies its per-job retry policy.
+    await boss.work(name, options, async (jobs) => {
+      await Promise.all(
+        jobs.map(async (job) => {
+          const j = job as PgBoss.Job<unknown>;
+          const started = Date.now();
+          try {
+            await handler(j as PgBoss.Job<never>);
+            console.log(
+              `[worker] ${name} job=${j.id} ok in ${Date.now() - started}ms`,
+            );
+          } catch (err) {
+            // §2.4 — never log raw payloads. Anthropic SDK + Drizzle error
+            // messages can echo request content; route through scrubError.
+            console.error(
+              `[worker] ${name} job=${j.id} failed in ${Date.now() - started}ms`,
+              scrubError(err),
+            );
+            throw err;
+          }
+        }),
+      );
     });
   }
 

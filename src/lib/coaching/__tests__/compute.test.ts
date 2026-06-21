@@ -11,7 +11,18 @@ import { describe, it, expect } from "vitest";
 import { computeCoachingPrompts } from "@/lib/coaching/compute";
 import type { ValidationFinding } from "@/lib/validation";
 
-const baseInvoice = {
+// Typecheck-sweep — explicit field types let individual tests override
+// with number | null and string | null without the literal-narrowing
+// inference rejecting the override.
+const baseInvoice: {
+  total: number;
+  currency: string;
+  paymentTerms: string | null;
+  invoiceDate: string | null;
+  dueDate: string | null;
+  discountPct: number | null;
+  discountAmount: number | null;
+} = {
   total: 1000,
   currency: "USD",
   paymentTerms: "Net 30",
@@ -21,7 +32,12 @@ const baseInvoice = {
   discountAmount: null,
 };
 
-const baseVendor = {
+const baseVendor: {
+  invoiceCount: number;
+  spend30d: string;
+  avgInvoiceAmount: string;
+  defaultPaymentTerms: string | null;
+} = {
   invoiceCount: 12,
   spend30d: "2000",
   avgInvoiceAmount: "500",
