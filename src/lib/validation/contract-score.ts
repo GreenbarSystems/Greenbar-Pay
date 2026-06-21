@@ -99,6 +99,13 @@ export function scoreLineAgainstContract(
 
   // Within / at / below contract. Emit a positive lineage entry so the
   // audit chain shows the rule fired and the line was on-rate.
+  //
+  // PR21 H3 — messages reach Anthropic via the briefing-card prompt.
+  // Combined with the same line's invoice unitPrice in the same prompt
+  // an LLM could reconstruct the negotiated rate. Keep messages
+  // directional only; the exact overage stays in `context` for the
+  // sanctioned errors_json + UI rendering path. Same pattern as the
+  // PR11 C6 fix for `unit_price_drift`.
   if (overage <= CONTRACT_WARNING_OVERAGE) {
     return {
       finding: {
@@ -107,7 +114,7 @@ export function scoreLineAgainstContract(
         message:
           overage <= 0
             ? `Line ${input.lineNumber ?? "?"} is at or below the contract rate.`
-            : `Line ${input.lineNumber ?? "?"} is within ${Math.round(overage * 100)}% of the contract rate.`,
+            : `Line ${input.lineNumber ?? "?"} is within the contract rate tolerance.`,
         context: {
           itemKeyword: input.invoiceKeyword,
           lineNumber: input.lineNumber,
@@ -125,7 +132,7 @@ export function scoreLineAgainstContract(
       finding: {
         code: "above_contract_rate",
         severity: "warning",
-        message: `Line ${input.lineNumber ?? "?"} is ${Math.round(overage * 100)}% above the contract rate.`,
+        message: `Line ${input.lineNumber ?? "?"} is materially above the contract rate.`,
         context: {
           itemKeyword: input.invoiceKeyword,
           lineNumber: input.lineNumber,
@@ -144,7 +151,7 @@ export function scoreLineAgainstContract(
     finding: {
       code: "severely_above_contract_rate",
       severity: "blocking",
-      message: `Line ${input.lineNumber ?? "?"} is ${Math.round(overage * 100)}% above the contract rate — exceeds the ${Math.round(CONTRACT_BLOCKING_OVERAGE * 100)}% tolerance.`,
+      message: `Line ${input.lineNumber ?? "?"} exceeds the contract rate by more than the blocking tolerance.`,
       context: {
         itemKeyword: input.invoiceKeyword,
         lineNumber: input.lineNumber,

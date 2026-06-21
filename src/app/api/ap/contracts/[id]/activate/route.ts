@@ -28,6 +28,7 @@ import { withOrg } from "@/db/client";
 import {
   vendorContracts,
   vendors,
+  documents,
   auditEvents,
 } from "@/db/schema";
 import { can, loadEffectiveRole } from "@/lib/rbac";
@@ -99,6 +100,41 @@ export async function POST(
               error: "invalid_state",
               message: `Contract is ${contract.status}; only 'extracted' contracts can be activated.`,
               currentStatus: contract.status,
+            },
+          };
+        }
+
+        // PR21 C1 — Maker-checker. The user who uploaded the contract
+        // PDF cannot activate it. Activation gates every future invoice
+        // for this vendor against the rate card; allowing one actor to
+        // both install and ratify is the textbook separation-of-duties
+        // failure an auditor reads as a fabricated-rate-card risk.
+        // Mirrors §1.5's invoice-side guard: uploader cannot approve
+        // their own submission (see PR — task #65).
+        const [uploader] = await tx
+          .select({ createdBy: documents.createdBy })
+          .from(documents)
+          .where(eq(documents.id, contract.documentId))
+          .limit(1);
+        if (uploader?.createdBy && uploader.createdBy === userId) {
+          await tx.insert(auditEvents).values({
+            organizationId,
+            actorType: "user",
+            actorId: userId,
+            action: "contract.activate_denied_sod",
+            entityType: "vendor_contract",
+            entityId: contract.id,
+            metadataJson: {
+              reason: "uploader_cannot_activate_own_submission",
+              documentId: contract.documentId,
+            },
+          });
+          return {
+            status: 403,
+            body: {
+              error: "separation_of_duties",
+              message:
+                "The user who uploaded a contract cannot activate it. Ask a second admin to ratify.",
             },
           };
         }
