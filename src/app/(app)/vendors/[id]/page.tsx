@@ -15,7 +15,10 @@ import {
   auditEvents,
   extractedInvoices,
   documents,
+  vendorContracts,
+  vendorContractLines,
 } from "@/db/schema";
+import ContractsSection from "./ContractsSection";
 import { and, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { requireUuid } from "@/lib/route-helpers";
 import { loadPermittedClientIds } from "@/lib/rbac/client-scope";
@@ -54,10 +57,11 @@ export default async function VendorDetailPage({
       if (!permitted.includes(vendor.clientId)) return null;
     }
 
-    // PR8 — review perf #4: fan out the three independent loads. Pricing,
-    // recent invoices, and profile events have no dependency between them
-    // once vendor is resolved.
-    const [pricing, recentApprovedInvoices, profileEvents] = await Promise.all([
+    // PR8 — review perf #4: fan out the independent loads. Pricing,
+    // recent invoices, profile events, and (Phase 9.5 PR4) contracts
+    // have no dependency between them once vendor is resolved.
+    const [pricing, recentApprovedInvoices, profileEvents, contracts] =
+      await Promise.all([
       // PR6: pricing history is append-only — display only the active rows.
       tx
         .select()
@@ -110,14 +114,85 @@ export default async function VendorDetailPage({
         )
         .orderBy(desc(auditEvents.createdAt))
         .limit(10),
+      // Phase 9.5 PR4 — every contract for this vendor (any status).
+      // Explicit projection keeps the wire shape narrow and stable —
+      // dropping unstable internal fields (llm_run_id, warnings_json).
+      // The active contract's rate-card lines are fetched after this
+      // in a single dependent query so the UI can show it expanded.
+      tx
+        .select({
+          id: vendorContracts.id,
+          status: vendorContracts.status,
+          contractNumber: vendorContracts.contractNumber,
+          effectiveDate: vendorContracts.effectiveDate,
+          expiryDate: vendorContracts.expiryDate,
+          paymentTerms: vendorContracts.paymentTerms,
+          currency: vendorContracts.currency,
+          confidence: vendorContracts.confidence,
+          earlyPaymentDiscountPct: vendorContracts.earlyPaymentDiscountPct,
+          earlyPaymentDiscountDays: vendorContracts.earlyPaymentDiscountDays,
+          documentId: vendorContracts.documentId,
+          createdAt: vendorContracts.createdAt,
+          supersededAt: vendorContracts.supersededAt,
+        })
+        .from(vendorContracts)
+        .where(
+          and(
+            eq(vendorContracts.organizationId, organizationId),
+            eq(vendorContracts.vendorId, vendor.id),
+          ),
+        )
+        .orderBy(desc(vendorContracts.createdAt))
+        .limit(20),
     ]);
 
-    return { vendor, pricing, recentApprovedInvoices, profileEvents };
+    // Phase 9.5 PR4 — pull rate-card lines for the active contract
+    // only. Extracted-but-not-active contracts get a line count
+    // surfaced via the list UI; their full lines are out of scope
+    // for the first cut (a "show details" expander can fetch them
+    // in a follow-up).
+    const activeContract = contracts.find((c) => c.status === "active");
+    const activeContractLines = activeContract
+      ? await tx
+          .select({
+            id: vendorContractLines.id,
+            description: vendorContractLines.description,
+            itemKeyword: vendorContractLines.itemKeyword,
+            unitPrice: vendorContractLines.unitPrice,
+            currency: vendorContractLines.currency,
+            priceBasis: vendorContractLines.priceBasis,
+            minQuantity: vendorContractLines.minQuantity,
+            maxQuantity: vendorContractLines.maxQuantity,
+            notes: vendorContractLines.notes,
+          })
+          .from(vendorContractLines)
+          .where(eq(vendorContractLines.contractId, activeContract.id))
+          .orderBy(vendorContractLines.description)
+      : [];
+
+    return {
+      vendor,
+      pricing,
+      recentApprovedInvoices,
+      profileEvents,
+      contracts,
+      activeContractLines,
+    };
   });
 
   if (!data) notFound();
-  const { vendor, pricing, recentApprovedInvoices, profileEvents } = data;
+  const {
+    vendor,
+    pricing,
+    recentApprovedInvoices,
+    profileEvents,
+    contracts,
+    activeContractLines,
+  } = data;
   const ready = vendor.invoiceCount >= 3;
+  // Phase 9.5 PR4 — only owner/admin can upload + activate contracts
+  // (mirrors the activate endpoint's invoice.override gate).
+  const canManageContracts = can(role, "invoice.override");
 
   return (
     <div className="space-y-6">
@@ -202,6 +277,44 @@ export default async function VendorDetailPage({
         )}
       </Section>
       )}
+
+      {/* Phase 9.5 PR4 — D3 second-half UI. Surfaces the vendor's
+          contracts (active + extracted + superseded) with an
+          expanded rate card for the active one. Upload + activate
+          actions are gated by invoice.override so only admin/owner
+          can mutate the contract surface (matches the activate
+          endpoint's gate). */}
+      <ContractsSection
+        vendorId={vendor.id}
+        clientId={vendor.clientId}
+        contracts={contracts.map((c) => ({
+          id: c.id,
+          status: c.status,
+          contractNumber: c.contractNumber,
+          effectiveDate: c.effectiveDate,
+          expiryDate: c.expiryDate,
+          paymentTerms: c.paymentTerms,
+          currency: c.currency,
+          confidence: c.confidence,
+          earlyPaymentDiscountPct: c.earlyPaymentDiscountPct,
+          earlyPaymentDiscountDays: c.earlyPaymentDiscountDays,
+          documentId: c.documentId,
+          createdAt: c.createdAt.toISOString(),
+          supersededAt: c.supersededAt?.toISOString() ?? null,
+        }))}
+        activeLines={activeContractLines.map((l) => ({
+          id: l.id,
+          description: l.description,
+          itemKeyword: l.itemKeyword,
+          unitPrice: l.unitPrice,
+          currency: l.currency,
+          priceBasis: l.priceBasis,
+          minQuantity: l.minQuantity,
+          maxQuantity: l.maxQuantity,
+          notes: l.notes,
+        }))}
+        canManage={canManageContracts}
+      />
 
       <Section title="Recent approved invoices">
         {recentApprovedInvoices.length === 0 ? (
