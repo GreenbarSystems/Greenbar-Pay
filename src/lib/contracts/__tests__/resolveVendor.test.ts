@@ -73,14 +73,11 @@ beforeAll(async () => {
       "globex corporation",
     ],
   });
-  // Vendor C: different client — should not match when clientId is scoped.
-  await db.insert(vendors).values({
-    organizationId: orgId,
-    clientId: clientBId,
-    name: "ACME Supplies LLC",
-    normalizedName: sql`normalize_vendor_text('ACME Supplies LLC')`,
-    aliases: [],
-  });
+  // No Vendor C — the (org, normalized_name) unique constraint
+  // precludes two same-named vendors in one org. The per-client
+  // scoping test below uses Client B's empty state to assert that
+  // a lookup scoped to Client B returns null even though the same-
+  // name vendor exists under Client A.
 });
 
 afterAll(async () => {
@@ -135,9 +132,11 @@ describe("resolveContractVendor", () => {
     expect(r).toBeNull();
   });
 
-  it("respects per-client scope (does not match the other client's vendor)", async () => {
-    // Client A has ACME, Client B also has ACME. Asking under Client B
-    // for ACME must return Client B's vendor row, not Client A's.
+  it("respects per-client scope (no match when the vendor is in a different client)", async () => {
+    // Vendor ACME lives under Client A. A contract uploaded under
+    // Client B should NOT auto-resolve to that vendor — clients
+    // are separate accounting scopes and a contract's rate card
+    // shouldn't silently apply to a different client's invoices.
     const aResult = await db.transaction((tx) =>
       resolveContractVendor(tx, {
         organizationId: orgId,
@@ -153,7 +152,7 @@ describe("resolveContractVendor", () => {
       }),
     );
     expect(aResult).not.toBeNull();
-    expect(bResult).not.toBeNull();
-    expect(aResult?.vendorId).not.toBe(bResult?.vendorId);
+    expect(aResult?.method).toBe("normalized");
+    expect(bResult).toBeNull();
   });
 });
