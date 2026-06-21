@@ -45,6 +45,15 @@ import {
   BriefingCardSchema,
   type BriefingCardResult,
 } from "./briefing-card-schema";
+import {
+  ContractExtractionSchema,
+  type ContractExtractionResult,
+} from "./contract-schema";
+import {
+  buildContractExtractionPrompt,
+  CONTRACT_PROMPT_NAME,
+  CONTRACT_PROMPT_VERSION,
+} from "./contract-prompt";
 import { checkCircuit, recordOutcome } from "./circuit";
 import { quotaRemaining } from "./quota";
 import type { BuiltPrompt } from "./prompt";
@@ -272,8 +281,39 @@ export async function dispatchBriefingCardGeneration(
   });
 }
 
+// ─── Call 3: vendor-contract extraction (Phase 9.5) ─────────────────────
+
+interface ContractGatewayInput {
+  organizationId: string;
+  documentText: string;
+  mimeType: string;
+  pageCount: number | null;
+  modelId?: string;
+  now?: number;
+}
+
+export async function dispatchContractExtraction(
+  input: ContractGatewayInput,
+): Promise<DispatchOutcome<ContractExtractionResult>> {
+  const prompt = buildContractExtractionPrompt({
+    documentText: input.documentText,
+    mimeType: input.mimeType,
+    pageCount: input.pageCount,
+  });
+  return runDispatch({
+    organizationId: input.organizationId,
+    inputCharCount: input.documentText.length,
+    prompt,
+    outputSchema: ContractExtractionSchema,
+    promptName: CONTRACT_PROMPT_NAME,
+    promptVersion: CONTRACT_PROMPT_VERSION,
+    modelId: input.modelId,
+    now: input.now,
+  });
+}
+
 export { LlmSchemaError, ProviderError };
 // Re-export the prior name so existing callers keep working until they migrate.
 export { LlmSchemaError as InvoiceSchemaError } from "./anthropic";
-export type { InvoiceExtractionResult };
+export type { InvoiceExtractionResult, ContractExtractionResult };
 export type { BriefingCardResult };

@@ -12,7 +12,7 @@ import { clients } from "./clients";
 import { users } from "./users";
 import { emailMessages } from "./emailMessages";
 import { emailAttachments } from "./emailAttachments";
-import { documentStatus, documentSource } from "./enums";
+import { documentStatus, documentSource, documentKind } from "./enums";
 
 export const documents = pgTable(
   "documents",
@@ -36,6 +36,14 @@ export const documents = pgTable(
       { onDelete: "set null" },
     ),
     source: documentSource("source").notNull(),
+    /**
+     * Phase 9.5 — discriminates the downstream extraction pipeline.
+     * 'invoice' (default) → extract-invoice-data + validate.
+     * 'contract' → extract-contract-data → vendor_contracts rate card.
+     * Backfilled to 'invoice' for all pre-existing rows in the sidecar
+     * migration so the column is NOT NULL safely.
+     */
+    kind: documentKind("kind").notNull().default("invoice"),
     originalFilename: text("original_filename").notNull(),
     mimeType: text("mime_type"),
     storageKey: text("storage_key").notNull(),

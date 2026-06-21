@@ -60,6 +60,10 @@ export async function handleProcessDocument(
         id: documents.id,
         mimeType: documents.mimeType,
         storageKey: documents.storageKey,
+        // Phase 9.5 — pulled into scope so the dispatch step at the
+        // bottom can route to extract-invoice-data vs extract-contract-
+        // data without a second SELECT.
+        kind: documents.kind,
       });
     return claimed[0] ?? null;
   });
@@ -157,17 +161,28 @@ export async function handleProcessDocument(
     });
   });
 
-  // ── 6. Hand off to Phase 3 LLM extraction ────────────────────────────
+  // ── 6. Hand off to the LLM extraction job that matches this doc's
+  //       kind. Phase 9.5 — when documents.kind = 'contract' route to
+  //       extract-contract-data; otherwise (invoice, default) the
+  //       existing extract-invoice-data path.
   // Only enqueue if the extraction produced enough text to work with —
   // an empty extraction would just hit the LLM gateway's text_too_large
   // path (or worse, waste a dispatch). Threshold is intentionally low.
   if (result.text.length >= LOW_TEXT_LENGTH) {
     const boss = await getQueue();
-    await boss.send(
-      JOB.extractInvoiceData,
-      { documentId, organizationId },
-      { singletonKey: `extract-invoice-data:${documentId}` },
-    );
+    if (doc.kind === "contract") {
+      await boss.send(
+        JOB.extractContractData,
+        { documentId, organizationId },
+        { singletonKey: `extract-contract-data:${documentId}` },
+      );
+    } else {
+      await boss.send(
+        JOB.extractInvoiceData,
+        { documentId, organizationId },
+        { singletonKey: `extract-invoice-data:${documentId}` },
+      );
+    }
   }
 }
 

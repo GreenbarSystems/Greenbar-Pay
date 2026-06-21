@@ -60,6 +60,8 @@ export const JOB = {
   generateBriefingCard: "generate-briefing-card",
   // Phase 11 — D4
   assembleEvidencePacket: "assemble-evidence-packet",
+  // Phase 9.5 — D3 second half
+  extractContractData: "extract-contract-data",
 } as const;
 
 export type JobPayloads = {
@@ -77,6 +79,11 @@ export type JobPayloads = {
   };
   [JOB.assembleEvidencePacket]: {
     extractedInvoiceId: string;
+    organizationId: string;
+  };
+  // Phase 9.5 — D3 second half. Same shape as extract-invoice-data.
+  [JOB.extractContractData]: {
+    documentId: string;
     organizationId: string;
   };
 };

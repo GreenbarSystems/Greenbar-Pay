@@ -92,3 +92,30 @@ export const emailAttachmentStatus = pgEnum("email_attachment_status", [
   "accepted",
   "rejected",
 ]);
+
+/**
+ * Phase 9.5 — document kind discriminator. process-document dispatches
+ * to extract-invoice-data or extract-contract-data based on this. The
+ * default is 'invoice' so the existing flow is unchanged; uploads can
+ * opt-in to 'contract' via the upload route's documentKind field.
+ */
+export const documentKind = pgEnum("document_kind", [
+  "invoice",
+  "contract",
+]);
+
+/**
+ * Phase 9.5 — vendor_contracts.status. Mirrors the invoice append-only
+ * pattern: a contract is created in pending_extraction (no rate-card
+ * yet), the extract-contract-data job advances to extracted on success,
+ * an admin can activate (active) or supersede. expired is set by a
+ * future scheduled job based on expiry_date.
+ */
+export const contractStatus = pgEnum("contract_status", [
+  "pending_extraction",
+  "extracted",
+  "active",
+  "superseded",
+  "expired",
+  "failed",
+]);
