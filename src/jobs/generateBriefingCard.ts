@@ -96,8 +96,18 @@ export async function handleGenerateBriefingCard(
     // schedule and makes the dependency story explicit.
     const [lines, latestValidation, latestExtraction, latestMatch] =
       await Promise.all([
+        // PR13 — explicit projection. The downstream consumer at the
+        // briefing prompt site (lineItems map) reads only description /
+        // quantity / unitPrice / amount. The prior select() shipped the
+        // Phase 9 line-confidence + raw OCR columns (~10 fields per
+        // line) over the wire and into worker memory for nothing.
         tx
-          .select()
+          .select({
+            description: extractedInvoiceLines.description,
+            quantity: extractedInvoiceLines.quantity,
+            unitPrice: extractedInvoiceLines.unitPrice,
+            amount: extractedInvoiceLines.amount,
+          })
           .from(extractedInvoiceLines)
           .where(eq(extractedInvoiceLines.extractedInvoiceId, extractedInvoiceId))
           .orderBy(extractedInvoiceLines.lineNumber),
@@ -169,13 +179,52 @@ export async function handleGenerateBriefingCard(
       latestExtraction.textLength !== null &&
       latestExtraction.textLength < LOW_TEXT_LENGTH;
 
-    let vendorProfile: typeof vendors.$inferSelect | null = null;
-    let priorInvoice: typeof extractedInvoices.$inferSelect | null = null;
+    // PR13 — explicit projections on both single-row lookups. Vendor
+    // and prior-invoice rows are wide (vendors carries the full stats
+    // block + aliases array + pricing snapshots; extracted_invoices
+    // carries OCR confidence + 25+ header fields). We use ~12 fields
+    // of each in the prompt path; project only those.
+    type VendorProfileSlice = Pick<
+      typeof vendors.$inferSelect,
+      | "id"
+      | "name"
+      | "normalizedName"
+      | "aliases"
+      | "invoiceCount"
+      | "lastInvoiceDate"
+      | "spend30d"
+      | "spend90d"
+      | "avgInvoiceAmount"
+      | "defaultPaymentTerms"
+      | "defaultGlCode"
+      | "termsDriftDetected"
+      | "duplicateSubmissionCount"
+    >;
+    type PriorInvoiceSlice = Pick<
+      typeof extractedInvoices.$inferSelect,
+      "id" | "invoiceNumber" | "invoiceDate" | "paymentTerms" | "currency" | "total"
+    >;
+    let vendorProfile: VendorProfileSlice | null = null;
+    let priorInvoice: PriorInvoiceSlice | null = null;
     let priorLines: Array<{ description: string | null }> = [];
 
     if (latestMatch?.vendorId) {
       const [v] = await tx
-        .select()
+        .select({
+          id: vendors.id,
+          name: vendors.name,
+          normalizedName: vendors.normalizedName,
+          aliases: vendors.aliases,
+          invoiceCount: vendors.invoiceCount,
+          lastInvoiceDate: vendors.lastInvoiceDate,
+          spend30d: vendors.spend30d,
+          spend90d: vendors.spend90d,
+          avgInvoiceAmount: vendors.avgInvoiceAmount,
+          defaultPaymentTerms: vendors.defaultPaymentTerms,
+          defaultGlCode: vendors.defaultGlCode,
+          termsDriftDetected: vendors.termsDriftDetected,
+          duplicateSubmissionCount: vendors.duplicateSubmissionCount,
+        })
         .from(vendors)
         .where(eq(vendors.id, latestMatch.vendorId))
         .limit(1);
@@ -186,7 +235,14 @@ export async function handleGenerateBriefingCard(
       // for the delta summary. Matched on canonical name as Phase 7
       // does — Phase 8 follow-up could replace with vendor_id FK.
       const [p] = await tx
-        .select()
+        .select({
+          id: extractedInvoices.id,
+          invoiceNumber: extractedInvoices.invoiceNumber,
+          invoiceDate: extractedInvoices.invoiceDate,
+          paymentTerms: extractedInvoices.paymentTerms,
+          currency: extractedInvoices.currency,
+          total: extractedInvoices.total,
+        })
         .from(extractedInvoices)
         .where(
           and(
