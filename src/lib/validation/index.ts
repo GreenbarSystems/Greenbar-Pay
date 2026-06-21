@@ -8,7 +8,7 @@
  * The job (validate-extracted-invoice) wraps this with DB I/O.
  */
 
-export type FindingSeverity = "blocking" | "warning";
+export type FindingSeverity = "blocking" | "warning" | "info";
 
 export type FindingCode =
   // Blocking rules
@@ -29,7 +29,17 @@ export type FindingCode =
   | "low_text_quality"
   // Phase 9 — D3 (Contract Validation)
   | "unit_price_drift"
-  | "new_line_item";
+  | "new_line_item"
+  // Phase 9.5 PR3 — Contract-grounded validation (D3 second half).
+  // Emitted by the contract scorer when an invoice line's unit_price
+  // exceeds the rate on the vendor's active contract for the matching
+  // keyword. Tiered by severity:
+  //   info     — line is within or below contract (positive signal)
+  //   warning  — above contract by > CONTRACT_WARNING_OVERAGE
+  //   blocking — above contract by > CONTRACT_BLOCKING_OVERAGE
+  | "within_contract_rate"
+  | "above_contract_rate"
+  | "severely_above_contract_rate";
 
 export interface ValidationFinding {
   code: FindingCode;

@@ -22,6 +22,8 @@ import {
   vendors,
   vendorMatches,
   vendorPricingHistory,
+  vendorContracts,
+  vendorContractLines,
   validationResults,
   auditEvents,
 } from "@/db/schema";
@@ -34,6 +36,10 @@ import {
 } from ".";
 import { matchVendor } from "./vendor-match";
 import { scoreLine, isRateDrift, type LinePricingStats } from "./line-score";
+import {
+  scoreLineAgainstContract,
+  type ContractLineMatch,
+} from "./contract-score";
 import { itemKeyword } from "@/jobs/recomputeVendorProfile";
 
 export interface RunValidationResult {
@@ -148,16 +154,44 @@ export async function runValidationInTx(
   // 4b. Phase 9 — D3 + F06: load vendor pricing stats for each keyword
   // present in the line items, then score each line. Skip when there's
   // no resolved vendor — we have no per-keyword history to compare to.
-  const lineScores = await scoreLinesAgainstVendorHistory(
-    tx,
-    vm.vendorId,
-    lines.map((l) => ({
-      id: l.id,
-      lineNumber: l.lineNumber,
-      description: l.description,
-      unitPrice: l.unitPrice === null ? null : Number(l.unitPrice),
-    })),
-  );
+  // 4c. Phase 9.5 PR3 — score lines against the vendor's active
+  // contract (D3 second half). Done in parallel with the statistical
+  // pass — neither depends on the other.
+  const [lineScores, contractScores] = await Promise.all([
+    scoreLinesAgainstVendorHistory(
+      tx,
+      vm.vendorId,
+      lines.map((l) => ({
+        id: l.id,
+        lineNumber: l.lineNumber,
+        description: l.description,
+        unitPrice: l.unitPrice === null ? null : Number(l.unitPrice),
+      })),
+    ),
+    scoreLinesAgainstActiveContract(
+      tx,
+      vm.vendorId,
+      lines.map((l) => ({
+        lineNumber: l.lineNumber,
+        description: l.description,
+        unitPrice: l.unitPrice === null ? null : Number(l.unitPrice),
+        currency: invoice.currency,
+      })),
+    ),
+  ]);
+
+  // When a line was contract-adjudicated, suppress the statistical
+  // unit_price_drift so the same line doesn't get two findings (and
+  // the briefing card doesn't double-weight the same signal). The
+  // contract finding takes precedence — it's grounded in negotiated
+  // rates, not a noisy historical mean.
+  const lineFindingsForValidator = contractScores.contractedLineNumbers.size
+    ? lineScores.findings.map((f) =>
+        contractScores.contractedLineNumbers.has(f.lineNumber)
+          ? { ...f, rateDrift: false }
+          : f,
+      )
+    : lineScores.findings;
 
   // 5. Run the pure validator.
   const findings = validateInvoice({
@@ -180,8 +214,17 @@ export async function runValidationInTx(
       ? { confidence: vm.confidence, score: vm.score }
       : null,
     textLength: latestExtraction?.textLength ?? null,
-    lineScores: lineScores.findings,
+    lineScores: lineFindingsForValidator,
   });
+
+  // Phase 9.5 PR3 — fold the contract findings into the result. They
+  // sit alongside the statistical findings; the briefing card prompt
+  // and risk score consumers see them as just more entries in
+  // errors_json. The withinContract info-level entries provide
+  // positive lineage that the rule fired at all.
+  if (contractScores.findings.length > 0) {
+    findings.push(...contractScores.findings);
+  }
 
   // 5b. PR12 C4 — per-line confidence used to be a bare in-place UPDATE,
   // which silently destroyed the evidence that supported any previously
@@ -321,6 +364,30 @@ export async function runValidationInTx(
         isNull(validationResults.supersededAt),
       ),
     );
+
+  // Phase 9.5 PR3 — audit when the contract validator actually
+  // fired. Always emit when an active contract existed for this
+  // vendor, even if all lines were within-contract, so the audit
+  // chain records that the rule was evaluated. The contractId is
+  // null when no active contract exists; in that case we don't
+  // bother emitting.
+  if (contractScores.contractId !== null) {
+    await tx.insert(auditEvents).values({
+      organizationId: args.organizationId,
+      actorType: "worker",
+      action: "validation.contract_scored",
+      entityType: "extracted_invoice",
+      entityId: args.extractedInvoiceId,
+      metadataJson: {
+        contractId: contractScores.contractId,
+        contractedLineNumbers: Array.from(
+          contractScores.contractedLineNumbers,
+        ),
+        contractFindingCount: contractScores.findings.length,
+        contractFindingCodes: contractScores.findings.map((f) => f.code),
+      },
+    });
+  }
 
   if (findings.length > 0) {
     const hasBlocking = blockingPresent(findings);
@@ -486,4 +553,109 @@ async function scoreLinesAgainstVendorHistory(
   }
 
   return { findings, persistUpdates };
+}
+
+/**
+ * Phase 9.5 PR3 — load the vendor's currently-active contract (if any)
+ * plus its rate-card lines, then score each invoice line against it
+ * via the pure scoreLineAgainstContract helper.
+ *
+ * Returns:
+ *   · `findings` — ValidationFinding[] to merge into the main result
+ *   · `contractedLineNumbers` — Set used by the caller to suppress the
+ *     statistical `unit_price_drift` finding for any line the contract
+ *     already adjudicated. Statistical history is the fallback, not a
+ *     stacking signal.
+ *   · `contractId` — the active contract id; null when none exists.
+ *     Used downstream for the contract.findings_emitted audit event.
+ */
+async function scoreLinesAgainstActiveContract(
+  tx: Tx,
+  vendorId: string | null,
+  lines: Array<{
+    lineNumber: number | null;
+    description: string | null;
+    unitPrice: number | null;
+    currency: string | null;
+  }>,
+): Promise<{
+  findings: ValidationFinding[];
+  contractedLineNumbers: Set<number>;
+  contractId: string | null;
+}> {
+  if (!vendorId || lines.length === 0) {
+    return { findings: [], contractedLineNumbers: new Set(), contractId: null };
+  }
+
+  const [contract] = await tx
+    .select({ id: vendorContracts.id })
+    .from(vendorContracts)
+    .where(
+      and(
+        eq(vendorContracts.vendorId, vendorId),
+        eq(vendorContracts.status, "active"),
+        isNull(vendorContracts.supersededAt),
+      ),
+    )
+    .limit(1);
+
+  if (!contract) {
+    return { findings: [], contractedLineNumbers: new Set(), contractId: null };
+  }
+
+  // Pull the relevant subset of contract lines — only those with a
+  // non-null itemKeyword (lines without one can't match) AND whose
+  // unitPrice is set (a line declaring "Quoted per project" carries
+  // no actionable rate).
+  const contractLineRows = await tx
+    .select({
+      itemKeyword: vendorContractLines.itemKeyword,
+      unitPrice: vendorContractLines.unitPrice,
+      currency: vendorContractLines.currency,
+      priceBasis: vendorContractLines.priceBasis,
+    })
+    .from(vendorContractLines)
+    .where(eq(vendorContractLines.contractId, contract.id));
+
+  const contractLines: ContractLineMatch[] = [];
+  for (const row of contractLineRows) {
+    if (row.itemKeyword === null || row.unitPrice === null) continue;
+    contractLines.push({
+      itemKeyword: row.itemKeyword,
+      unitPrice: Number(row.unitPrice),
+      currency: row.currency,
+      priceBasis: row.priceBasis,
+    });
+  }
+
+  if (contractLines.length === 0) {
+    return {
+      findings: [],
+      contractedLineNumbers: new Set(),
+      contractId: contract.id,
+    };
+  }
+
+  const findings: ValidationFinding[] = [];
+  const contractedLineNumbers = new Set<number>();
+  for (const l of lines) {
+    if (l.unitPrice === null) continue;
+    const kw = itemKeyword(l.description);
+    const scored = scoreLineAgainstContract(
+      {
+        lineNumber: l.lineNumber,
+        invoiceKeyword: kw,
+        invoiceUnitPrice: l.unitPrice,
+        invoiceCurrency: l.currency,
+      },
+      contractLines,
+    );
+    if (!scored) continue;
+    findings.push(scored.finding);
+    if (l.lineNumber !== null) {
+      contractedLineNumbers.add(l.lineNumber);
+    }
+  }
+
+  return { findings, contractedLineNumbers, contractId: contract.id };
 }
