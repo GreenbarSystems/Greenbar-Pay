@@ -17,6 +17,7 @@
  *      via compare-and-set; advance documents.status the same way.
  *   8. Audit.
  */
+import { createHash } from "node:crypto";
 import type PgBoss from "pg-boss";
 import { and, eq, inArray, sql } from "drizzle-orm";
 import { withOrgAsWorker } from "@/db/client";
@@ -250,6 +251,15 @@ async function runExport(
         ),
       );
 
+    // PR20 — capture the file's content hash at the moment of write
+    // so the audit chain links what was produced to what's later
+    // delivered. The export.downloaded event (PR19 H5) records the
+    // download; comparing manifest_hash equivalents between produce
+    // and deliver detects storage-layer substitution or corruption.
+    const fileContentHash = createHash("sha256")
+      .update(body)
+      .digest("hex");
+
     await tx.insert(auditEvents).values({
       organizationId,
       actorType: "worker",
@@ -260,6 +270,7 @@ async function runExport(
         format,
         itemCount: dataRows.length,
         fileSizeBytes: body.length,
+        fileContentHash,
       },
     });
   });

@@ -57,5 +57,11 @@ export const documents = pgTable(
     orgStatus: index("idx_documents_org_status").on(t.organizationId, t.status),
     clientStatus: index("idx_documents_client_status").on(t.clientId, t.status),
     contentHashIdx: index("idx_documents_content_hash").on(t.contentHash),
+    // PR20 — review queue sort key. Migration 0020 creates the SQL
+    // index; declaration here keeps the schema-as-source-of-truth.
+    orgReceivedIdx: index("idx_documents_org_received").on(
+      t.organizationId,
+      t.receivedAt.desc(),
+    ),
   }),
 );

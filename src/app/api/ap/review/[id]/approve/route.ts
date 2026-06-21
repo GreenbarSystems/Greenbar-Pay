@@ -35,6 +35,7 @@ import {
   briefingCards,
   llmRuns,
   invoiceOverrideLog,
+  users,
 } from "@/db/schema";
 import { riskBand } from "@/lib/briefing/risk-score";
 import { can, loadEffectiveRole } from "@/lib/rbac";
@@ -373,6 +374,39 @@ export async function POST(
         // never just invoice.approved with no preceding override.
         let overrideRowId: string | null = null;
         if (isOverrideAttempt && body.overrideJustification) {
+          // PR20 — validate secondApproverId is a real user in this
+          // org and not the overriding user. The audit chain claims a
+          // second human reviewed; accepting an arbitrary caller-
+          // supplied UUID (which the prior code did) trivialises that
+          // claim. The user table lookup is org-scoped via RLS so a
+          // cross-org id never matches.
+          if (body.secondApproverId) {
+            if (body.secondApproverId === userId) {
+              return {
+                status: 422,
+                body: {
+                  error: "invalid_second_approver",
+                  message:
+                    "Second approver must be a different user than the approver.",
+                },
+              };
+            }
+            const [secondApprover] = await tx
+              .select({ id: users.id })
+              .from(users)
+              .where(eq(users.id, body.secondApproverId))
+              .limit(1);
+            if (!secondApprover) {
+              return {
+                status: 422,
+                body: {
+                  error: "invalid_second_approver",
+                  message:
+                    "Second approver id does not match a user in this organisation.",
+                },
+              };
+            }
+          }
           const blockingCodes = Array.isArray(latest.errorsJson)
             ? (latest.errorsJson as Array<{ code: string; severity: string }>)
                 .filter((f) => f.severity === "blocking")
