@@ -10,7 +10,10 @@ export * from "./briefingCards";
 export * from "./vendors";
 // vendorPricingHistory is exported via ./vendors
 export * from "./validationResults";
-export * from "./exports";
+// Renamed from ./exports because the bare-word `exports` collides
+// with CJS module globals in drizzle-kit's TS loader and breaks
+// `drizzle-kit generate` in ESM projects.
+export * from "./exportsTable";
 export * from "./emailMessages";
 export * from "./emailAttachments";
 export * from "./auditEvents";
