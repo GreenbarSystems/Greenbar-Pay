@@ -96,12 +96,21 @@ export async function handleRecomputeVendorProfile(
     // Match path: invoice's vendor_name normalized === vendor's
     // normalized_name OR is in the vendor's aliases (already stored
     // pre-normalized by bootstrap).
-    const invoiceRows = await tx
+    // PR13 — collapse the prior two org-wide scans into a single query.
+    // We need approved+exported invoices for the stats aggregation and
+    // ALL vendor invoices (any review_status) for the duplicate-pattern
+    // count. The expensive part is the JOIN's normalize_vendor_text()
+    // expression evaluated row-by-row; doing it once and splitting in JS
+    // halves both round-trips and CPU work. Partial functional index
+    // idx_invoices_org_normalized_vendor (sidecar 0022) makes the
+    // approved+exported subset a fast bitmap scan.
+    const allVendorInvoices = await tx
       .select({
         id: extractedInvoices.id,
         total: extractedInvoices.total,
         invoiceDate: extractedInvoices.invoiceDate,
         paymentTerms: extractedInvoices.paymentTerms,
+        reviewStatus: extractedInvoices.reviewStatus,
       })
       .from(extractedInvoices)
       .innerJoin(
@@ -114,12 +123,11 @@ export async function handleRecomputeVendorProfile(
           ),
         ),
       )
-      .where(
-        and(
-          eq(extractedInvoices.organizationId, organizationId),
-          inArray(extractedInvoices.reviewStatus, ["approved", "exported"]),
-        ),
-      );
+      .where(eq(extractedInvoices.organizationId, organizationId));
+
+    const invoiceRows = allVendorInvoices.filter(
+      (r) => r.reviewStatus === "approved" || r.reviewStatus === "exported",
+    );
 
     if (invoiceRows.length === 0) {
       await tx
@@ -204,22 +212,13 @@ export async function handleRecomputeVendorProfile(
     //
     // First we need the full set of this vendor's invoices, not just
     // approved+exported — a rejected duplicate counts toward the pattern.
-    const allVendorInvoiceIds = (
-      await tx
-        .select({ id: extractedInvoices.id })
-        .from(extractedInvoices)
-        .innerJoin(
-          vendors,
-          and(
-            eq(vendors.id, vendorId),
-            or(
-              sql`normalize_vendor_text(${extractedInvoices.vendorName}) = ${vendors.normalizedName}`,
-              sql`normalize_vendor_text(${extractedInvoices.vendorName}) = ANY(${vendors.aliases})`,
-            ),
-          ),
-        )
-        .where(eq(extractedInvoices.organizationId, organizationId))
-    ).map((r) => r.id);
+    //
+    // PR13 — reuse the collapsed scan from above. The prior second
+    // query repeated the same join with the same predicate, just
+    // dropping the review_status filter. Slicing the in-memory result
+    // saves a round trip and the duplicate normalize_vendor_text()
+    // evaluation across every org-wide invoice row.
+    const allVendorInvoiceIds = allVendorInvoices.map((r) => r.id);
 
     const dupCount =
       allVendorInvoiceIds.length === 0
@@ -347,7 +346,9 @@ export async function handleRecomputeVendorProfile(
       // by invoice date desc, slice, then return to date-asc order so
       // trend math sees the same order as before).
       truncateToMostRecent(agg, PRICING_SAMPLE_CAP);
-      const stats = computeKeywordStats(agg);
+      // PR13 — truncateToMostRecent guarantees date-ascending order;
+      // tell computeKeywordStats so the trend block skips its resort.
+      const stats = computeKeywordStats({ ...agg, presorted: true });
       const samples = stats.sampleCount; // already capped
 
       await tx
@@ -413,6 +414,15 @@ export interface KeywordStatsInput {
   prices: number[];
   dates: Date[];
   latestPrice: number;
+  /**
+   * PR13 — opt-in skip for the trend block's internal re-sort. The
+   * recompute hot-path calls `truncateToMostRecent` first, which
+   * guarantees date-ascending order; passing `presorted: true` saves
+   * a full O(n log n) sort and a transient `Array<{p,d}>` per
+   * keyword. Tests and callers without the guarantee can omit it
+   * (default false — preserves the prior re-sort behaviour).
+   */
+  presorted?: boolean;
 }
 export interface KeywordStats {
   sampleCount: number;
@@ -448,9 +458,18 @@ export function computeKeywordStats(input: KeywordStatsInput): KeywordStats {
   // statistically defensible direction.
   let trend: KeywordStats["trend"] = "insufficient_data";
   if (n >= 6) {
-    const indexed = input.prices.map((p, i) => ({ p, d: input.dates[i] }));
-    indexed.sort((a, b) => a.d.getTime() - b.d.getTime());
-    const sorted = indexed.map((x) => x.p);
+    // PR13 — when the caller already guarantees date-ascending prices
+    // (recompute does via truncateToMostRecent), skip the resort and
+    // work directly on input.prices. Eliminates the per-keyword
+    // Array<{p,d}> allocation that dominated GC at scale.
+    let sorted: number[];
+    if (input.presorted) {
+      sorted = input.prices;
+    } else {
+      const indexed = input.prices.map((p, i) => ({ p, d: input.dates[i] }));
+      indexed.sort((a, b) => a.d.getTime() - b.d.getTime());
+      sorted = indexed.map((x) => x.p);
+    }
     const third = Math.max(2, Math.floor(n / 3));
     const oldMean = mean(sorted.slice(0, third));
     const newMean = mean(sorted.slice(-third));
@@ -478,7 +497,14 @@ function mean(xs: number[]): number {
 /**
  * PR10 C3 — trim a keyword series in place to the N most-recent samples
  * by date. Idempotent when the series is already at or under the cap.
- * Mutates the input arrays directly to avoid a copy.
+ *
+ * PR13 — sort once descending, slice, then reverse in place to restore
+ * date-asc order. The prior implementation sorted twice (desc to pick,
+ * asc to restore), and the inner Array.prototype.reverse() is O(n) vs
+ * the prior O(n log n) second sort. The indexed object array is still
+ * unavoidable since we sort prices BY a parallel date array, but it
+ * now lives for one pass instead of two. Returns the series in date-
+ * ascending order so computeKeywordStats can skip its own re-sort.
  */
 function truncateToMostRecent(
   series: { prices: number[]; dates: Date[] },
@@ -487,12 +513,10 @@ function truncateToMostRecent(
   if (series.prices.length <= cap) return;
   const indexed = series.prices.map((p, i) => ({ p, d: series.dates[i] }));
   indexed.sort((a, b) => b.d.getTime() - a.d.getTime());
-  const kept = indexed.slice(0, cap);
-  // Restore date-asc ordering so downstream consumers (e.g. trend math)
-  // see the same temporal direction they did pre-truncation.
-  kept.sort((a, b) => a.d.getTime() - b.d.getTime());
-  series.prices = kept.map((x) => x.p);
-  series.dates = kept.map((x) => x.d);
+  indexed.length = cap;
+  indexed.reverse();
+  series.prices = indexed.map((x) => x.p);
+  series.dates = indexed.map((x) => x.d);
 }
 
 /**
