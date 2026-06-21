@@ -3,15 +3,32 @@
 /**
  * Side-by-side review UI.
  *
- * - File preview via signed S3/MinIO URL (PDF → <iframe>, image → <img>).
+ * - File preview via signed S3/MinIO URL
+ *     · PDF → react-pdf (Phase 11.1), inline render with page nav + zoom
+ *     · image → <img>
  * - Editable header fields. PATCH includes `If-Match: <updated_at>` so
  *   §4.7 concurrency rejects stale edits with a 409.
  * - Approve / reject use `Idempotency-Key` (§4.6).
  */
 import { useEffect, useState } from "react";
+import dynamic from "next/dynamic";
 import { useRouter } from "next/navigation";
 import type { UserRole } from "@/lib/rbac";
 import { can } from "@/lib/rbac";
+
+// Phase 11.1 — react-pdf touches window/document at import time. Lazy-
+// load with ssr: false so the SSR pass doesn't pull pdfjs-dist into the
+// server bundle. The fallback while the chunk loads matches the same
+// loading state the viewer renders for the document itself, so the
+// transition is invisible.
+const PdfViewer = dynamic(() => import("./PdfViewer"), {
+  ssr: false,
+  loading: () => (
+    <div className="flex h-[78vh] items-center justify-center rounded border border-gray-200 bg-gray-50 text-xs text-gray-500">
+      Loading viewer…
+    </div>
+  ),
+});
 
 /**
  * Phase 11.2 — F02 Stop Work Authority canonical reject reasons. Must
@@ -339,11 +356,11 @@ export default function ReviewDetailClient(props: Props) {
             className="mx-auto max-h-[80vh] w-auto rounded border border-gray-200"
           />
         ) : (
-          <iframe
-            src={props.fileUrl}
-            className="h-[80vh] w-full rounded border border-gray-200"
-            title="Invoice preview"
-          />
+          // Phase 11.1 — inline PDF render via react-pdf. The viewer
+          // falls back to a plain <iframe> internally if PDF.js can't
+          // load the file (corrupt PDF, CSP block, network error) so
+          // reviewers are never stuck with a blank panel.
+          <PdfViewer fileUrl={props.fileUrl} fallbackUrl={props.fileUrl} />
         )}
       </div>
 
