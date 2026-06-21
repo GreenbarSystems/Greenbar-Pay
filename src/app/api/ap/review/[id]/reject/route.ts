@@ -22,9 +22,10 @@ import {
 } from "@/lib/route-helpers";
 // Phase 11.2 — schemas extracted to ./body-schema so the modal-contract
 // test imports them without pulling auth/drizzle at test-import time.
-import { RejectReasonCode, RejectSchema } from "./body-schema";
-
-export { RejectReasonCode };
+// Phase 11.1 follow-up: Next.js App Router route files can only export
+// the HTTP verb handlers; consumers needing RejectReasonCode (UI etc.)
+// import from "./body-schema" directly.
+import { RejectSchema } from "./body-schema";
 
 export async function POST(
   req: Request,
