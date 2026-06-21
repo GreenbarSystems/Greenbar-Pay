@@ -50,6 +50,16 @@ export default async function ReviewListPage({
       limit 1
     )`;
 
+    // Phase 11.2 — F02 override indicator. invoice_override_log is
+    // append-only (DB-level RULE) so EXISTS is sufficient; no need to
+    // join the row itself when the queue cell only renders a badge.
+    // Index idx_override_log_invoice (org, invoice) makes this O(1).
+    const isOverride = sql<boolean>`exists (
+      select 1
+      from invoice_override_log ol
+      where ol.extracted_invoice_id = ${extractedInvoices.id}
+    )`;
+
     const where =
       active === "all"
         ? and(
@@ -73,6 +83,7 @@ export default async function ReviewListPage({
         reviewStatus: extractedInvoices.reviewStatus,
         receivedAt: documents.receivedAt,
         warnings: sql<unknown[]>`coalesce(${latestValidation}, '[]'::jsonb)`,
+        isOverride,
       })
       .from(extractedInvoices)
       .innerJoin(documents, eq(documents.id, extractedInvoices.documentId))
@@ -156,7 +167,21 @@ export default async function ReviewListPage({
                       {r.total ? `${r.currency ?? ""} ${r.total}` : "—"}
                     </td>
                     <td className="px-4 py-2">
-                      <ReviewBadge status={r.reviewStatus} />
+                      <div className="flex items-center gap-1">
+                        <ReviewBadge status={r.reviewStatus} />
+                        {/* Phase 11.2 — F02 override marker. Visible
+                            on approved + exported rows that came in via
+                            Stop Work Authority so an auditor scanning
+                            the queue spots them without opening each. */}
+                        {r.isOverride && (
+                          <span
+                            title="Approved via Stop Work Authority"
+                            className="rounded border border-red-300 bg-red-50 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-red-800"
+                          >
+                            OVR
+                          </span>
+                        )}
+                      </div>
                     </td>
                     <td className="px-4 py-2">
                       <WarningPills

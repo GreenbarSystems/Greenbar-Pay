@@ -49,22 +49,10 @@ import { bootstrapVendorOnApprove } from "@/lib/vendors/bootstrap";
 import { getQueue, JOB } from "@/lib/queue";
 import { scrubError } from "@/lib/llm/scrub";
 
-/**
- * Phase 11 — F02 Stop Work Authority body schema. When blocking
- * findings exist, the route refuses unless the body includes a
- * justification of at least 20 chars (the DB CHECK echoes this floor).
- * Body is optional on the happy path — clean approves don't touch it.
- */
-const ApproveBodySchema = z
-  .object({
-    overrideJustification: z
-      .string()
-      .min(20, "justification must be at least 20 characters")
-      .max(2000)
-      .optional(),
-    secondApproverId: z.string().uuid().optional(),
-  })
-  .partial();
+// Phase 11.2 — schema extracted to ./body-schema so the modal-contract
+// test can import without pulling the entire route's auth/drizzle
+// dependency graph at test import time.
+import { ApproveBodySchema } from "./body-schema";
 
 export async function POST(
   req: Request,
