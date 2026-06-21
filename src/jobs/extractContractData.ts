@@ -37,6 +37,7 @@ import {
 } from "@/lib/llm";
 import { scrub, scrubError } from "@/lib/llm/scrub";
 import { itemKeyword } from "@/jobs/recomputeVendorProfile";
+import { resolveContractVendor } from "@/lib/contracts/resolveVendor";
 import type { JobPayloads } from "@/lib/queue";
 import { JOB } from "@/lib/queue";
 
@@ -59,6 +60,10 @@ export async function handleExtractContractData(
         mimeType: true,
         pageCount: true,
         kind: true,
+        // Phase 9.5 PR2 — clientId scopes the contract→vendor lookup
+        // so an admin uploading under a specific client doesn't match
+        // a same-named vendor belonging to a different client.
+        clientId: true,
       },
     });
     if (!doc) return { kind: "missing_doc" as const };
@@ -108,12 +113,19 @@ export async function handleExtractContractData(
   });
 
   // ── 4. Persist outcome
-  await persistOutcome(organizationId, documentId, outcome, documentText.length);
+  await persistOutcome(
+    organizationId,
+    documentId,
+    doc.clientId,
+    outcome,
+    documentText.length,
+  );
 }
 
 async function persistOutcome(
   organizationId: string,
   documentId: string,
+  clientId: string | null,
   outcome: DispatchOutcome<ContractExtractionResult>,
   charCount: number,
 ): Promise<void> {
@@ -161,14 +173,24 @@ async function persistOutcome(
     if (outcome.kind === "succeeded") {
       const r = outcome.result;
 
-      // Header row. vendorId stays NULL — bootstrap + activation are
-      // out-of-scope for this PR.
+      // Phase 9.5 PR2 — auto-resolve vendor from the extracted name if a
+      // confident (exact normalized OR alias) match exists. No fuzzy /
+      // creation here: contracts are an admin surface with no inline
+      // correction loop. When the resolver returns null, vendor_id
+      // stays NULL until the admin assigns one at activation time.
+      const resolved = await resolveContractVendor(tx, {
+        organizationId,
+        extractedVendorName: r.vendorName,
+        clientId,
+      });
+
       const [contract] = await tx
         .insert(vendorContracts)
         .values({
           organizationId,
           documentId,
           llmRunId: run.id,
+          vendorId: resolved?.vendorId ?? null,
           contractNumber: r.contractNumber,
           effectiveDate: r.effectiveDate,
           expiryDate: r.expiryDate,
@@ -229,6 +251,13 @@ async function persistOutcome(
           // strips obvious PII patterns; the vendor name is the
           // primary linkage field so we leave it readable.
           vendorName: scrub(r.vendorName ?? ""),
+          // Phase 9.5 PR2 — resolver outcome on the same event so an
+          // auditor reading contract.extracted sees both 'what came
+          // out of the LLM' and 'who we mapped it to' without joining
+          // through a second event.
+          vendorResolved: resolved !== null,
+          vendorResolutionMethod: resolved?.method ?? null,
+          vendorId: resolved?.vendorId ?? null,
         },
       });
       return;
