@@ -65,8 +65,13 @@ describe("computeCoachingPrompts", () => {
   it("returns an empty array when no triggers fire", () => {
     // Boring invoice: matches terms, total is unremarkable, no new
     // lines, projected spend stays within run-rate.
+    //
+    // Issue #3 fix: spend30d="100" + total=400 actually fires
+    // cumulative_spend_alert (baseline=spend30=100 since >0, projected
+    // 500 / 100 = 5× > 1.5× trigger). Use spend30d="2000" so projected
+    // 2400 / 2000 = 1.2× and the alert correctly stays silent.
     const r = computeCoachingPrompts(
-      inputs({ invoice: { total: 400 }, vendorProfile: { spend30d: "100" } }),
+      inputs({ invoice: { total: 400 }, vendorProfile: { spend30d: "2000" } }),
     );
     expect(r).toEqual([]);
   });
