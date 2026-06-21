@@ -11,6 +11,7 @@ import { handleExportInvoices } from "./exportInvoices";
 import { handleRecomputeVendorProfile } from "./recomputeVendorProfile";
 import { handleGenerateBriefingCard } from "./generateBriefingCard";
 import { handleAssembleEvidencePacket } from "./assembleEvidencePacket";
+import { handleExtractContractData } from "./extractContractData";
 
 type Handler<N extends keyof JobPayloads> = (
   job: PgBoss.Job<JobPayloads[N]>,
@@ -85,5 +86,13 @@ export const HANDLERS: Array<{
     name: JOB.assembleEvidencePacket,
     options: { batchSize: 8 },
     handler: handleAssembleEvidencePacket as Handler<keyof JobPayloads>,
+  },
+  {
+    // Phase 9.5 — D3 second half. LLM dispatch — keep batchSize: 1 for
+    // circuit-breaker visibility, same logic as extract-invoice-data
+    // and generate-briefing-card.
+    name: JOB.extractContractData,
+    options: { batchSize: 1 },
+    handler: handleExtractContractData as Handler<keyof JobPayloads>,
   },
 ];

@@ -17,3 +17,5 @@ export * from "./auditEvents";
 export * from "./apiIdempotencyKeys";
 export * from "./evidencePackets";
 export * from "./invoiceOverrideLog";
+// Phase 9.5 — Contract Document Parser (D3 second half).
+export * from "./vendorContracts";

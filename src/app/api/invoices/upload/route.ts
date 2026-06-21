@@ -68,6 +68,14 @@ export async function POST(req: Request) {
   const clientId =
     typeof clientIdRaw === "string" && clientIdRaw.length > 0 ? clientIdRaw : null;
 
+  // Phase 9.5 — documentKind discriminator routes the upload to either
+  // the invoice extraction pipeline (default) or the contract
+  // extraction pipeline. The value lands on documents.kind and
+  // process-document dispatches to the matching extractor.
+  const documentKindRaw = formData.get("documentKind");
+  const documentKind: "invoice" | "contract" =
+    documentKindRaw === "contract" ? "contract" : "invoice";
+
   if (!(file instanceof File)) {
     return NextResponse.json({ error: "missing `file`" }, { status: 400 });
   }
@@ -142,6 +150,7 @@ export async function POST(req: Request) {
         organizationId,
         clientId,
         source: "upload",
+        kind: documentKind,
         originalFilename: file.name,
         mimeType: inspected.mimeType,
         storageKey: "pending",
