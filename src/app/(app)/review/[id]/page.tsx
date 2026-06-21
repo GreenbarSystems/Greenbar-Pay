@@ -10,9 +10,12 @@ import {
   vendors,
   briefingCards,
   auditEvents,
+  invoiceOverrideLog,
+  users,
 } from "@/db/schema";
 import { and, desc, eq, isNull } from "drizzle-orm";
 import { storage } from "@/lib/storage";
+import { can, loadEffectiveRole } from "@/lib/rbac";
 import ReviewDetailClient from "./ReviewDetailClient";
 
 export default async function ReviewDetailPage({
@@ -22,7 +25,7 @@ export default async function ReviewDetailPage({
 }) {
   const session = await auth();
   if (!session?.user) return null;
-  const { organizationId, role } = session.user;
+  const { organizationId, role, id: userId } = session.user;
 
   const data = await withOrg(organizationId, async (tx) => {
     const [invoice] = await tx
@@ -110,6 +113,24 @@ export default async function ReviewDetailPage({
       .orderBy(desc(auditEvents.createdAt))
       .limit(20);
 
+    // Phase 11.2 — F02 override log row when present. Joined with
+    // users to surface the second-approver name in the badge without
+    // a second client-side fetch. invoice_override_log is append-only
+    // (DB-level RULE) so at most one row exists per invoice; LIMIT 1
+    // is a defensive bound, not a correctness requirement.
+    const [overrideRow] = await tx
+      .select({
+        id: invoiceOverrideLog.id,
+        approvedAt: invoiceOverrideLog.approvedAt,
+        blockingFindingCodes: invoiceOverrideLog.blockingFindingCodes,
+        secondApproverName: users.name,
+        secondApproverEmail: users.email,
+      })
+      .from(invoiceOverrideLog)
+      .leftJoin(users, eq(users.id, invoiceOverrideLog.secondApproverId))
+      .where(eq(invoiceOverrideLog.extractedInvoiceId, invoice.id))
+      .limit(1);
+
     // Phase 8 — D2: pull the active briefing card (filtered to
     // superseded_at IS NULL — same append-only pattern as validation).
     //
@@ -141,6 +162,16 @@ export default async function ReviewDetailPage({
       .orderBy(desc(briefingCards.createdAt))
       .limit(1);
 
+    // Phase 11.2 — resolve effective role against the invoice's
+    // clientId so the UI gate matches the route's gate exactly.
+    // Mirrors the approve route's role composition: invoice.override
+    // requires admin/owner at either the org or the client level.
+    const composedRole = await loadEffectiveRole(tx, {
+      userId,
+      clientId: invoice.clientId,
+      orgRole: role,
+    });
+
     return {
       invoice,
       doc,
@@ -150,6 +181,8 @@ export default async function ReviewDetailPage({
       vendorProfile,
       briefingCard,
       audits,
+      overrideRow,
+      composedRole,
     };
   });
 
@@ -161,11 +194,37 @@ export default async function ReviewDetailPage({
   // exposure if the URL ends up in browser history / extension caches.
   const fileUrl = await storage.getSignedUrl(data.doc.storageKey, 120);
 
+  // Phase 11.2 — canOverride is computed server-side using the same
+  // role resolution as the approve route (loadEffectiveRole). The
+  // client receives a boolean only; never the role itself, so a
+  // tampered DevTools value can't elevate.
+  const canOverride = can(data.composedRole, "invoice.override");
+
   return (
     <ReviewDetailClient
       role={role}
+      canOverride={canOverride}
       fileUrl={fileUrl}
       fileMime={data.doc.mimeType ?? "application/octet-stream"}
+      override={
+        data.overrideRow
+          ? {
+              approvedAt: data.overrideRow.approvedAt.toISOString(),
+              blockingFindingCodes: Array.isArray(
+                data.overrideRow.blockingFindingCodes,
+              )
+                ? (data.overrideRow.blockingFindingCodes as string[])
+                : [],
+              // PR16-style boundary discipline: name OR email, never
+              // the user id (id is the server's join key and has no
+              // UI use). Falls back to email when name is null.
+              secondApprover:
+                data.overrideRow.secondApproverName ??
+                data.overrideRow.secondApproverEmail ??
+                null,
+            }
+          : null
+      }
       invoice={{
         ...data.invoice,
         // Drizzle returns numerics as strings; the client form keeps them as strings.

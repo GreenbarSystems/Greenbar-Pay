@@ -8,10 +8,27 @@
  *   §4.7 concurrency rejects stale edits with a 409.
  * - Approve / reject use `Idempotency-Key` (§4.6).
  */
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import type { UserRole } from "@/lib/rbac";
 import { can } from "@/lib/rbac";
+
+/**
+ * Phase 11.2 — F02 Stop Work Authority canonical reject reasons. Must
+ * stay in lock-step with src/app/api/ap/review/[id]/reject/route.ts's
+ * RejectReasonCode enum.
+ */
+const REJECT_REASONS: Array<{ code: string; label: string }> = [
+  { code: "not_an_invoice", label: "Not an invoice" },
+  { code: "duplicate_submission", label: "Duplicate submission" },
+  { code: "wrong_vendor", label: "Wrong vendor" },
+  { code: "wrong_amount", label: "Wrong amount" },
+  { code: "missing_information", label: "Missing information" },
+  { code: "policy_violation", label: "Policy violation" },
+  { code: "other", label: "Other" },
+];
+
+const OVERRIDE_MIN_JUSTIFICATION = 20;
 
 type Numeric = string | null;
 
@@ -63,8 +80,24 @@ interface Audit {
   createdAt: string;
 }
 
+interface OverrideMetadata {
+  approvedAt: string;
+  blockingFindingCodes: string[];
+  secondApprover: string | null;
+}
+
 interface Props {
   role: UserRole;
+  /**
+   * Phase 11.2 — F02 server-resolved permission. Composed against the
+   * invoice's clientId via loadEffectiveRole, so per-client elevations
+   * compose correctly. The client never sees the underlying role —
+   * only the boolean — so a DevTools tamper can't elevate.
+   */
+  canOverride: boolean;
+  /** Phase 11.2 — when this invoice was approved via override, the
+   *  metadata surfaces the override badge + tooltip. Null otherwise. */
+  override: OverrideMetadata | null;
   fileUrl: string;
   fileMime: string;
   invoice: InvoiceShape;
@@ -156,8 +189,19 @@ export default function ReviewDetailClient(props: Props) {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
+  const [overrideOpen, setOverrideOpen] = useState(false);
+  const [rejectOpen, setRejectOpen] = useState(false);
 
   const isTerminal = ["approved", "rejected", "exported"].includes(form.reviewStatus);
+
+  // Phase 11.2 — F02 gate. blocking findings drive the banner + button
+  // swap. The approve route enforces the same gate, so a tampered DOM
+  // posting a clean approve when blocking findings exist will still
+  // 422 — but the UI nudges the legitimate path.
+  const blockingFindings = props.findings.filter(
+    (f) => f.severity === "blocking",
+  );
+  const hasBlockingFindings = blockingFindings.length > 0;
 
   async function handleSave() {
     if (!canEdit || isTerminal) return;
@@ -199,44 +243,81 @@ export default function ReviewDetailClient(props: Props) {
     }
   }
 
-  async function handleApprove() {
+  async function handleApprove(overridePayload?: {
+    overrideJustification: string;
+    secondApproverId: string | null;
+  }) {
     if (!canApprove || isTerminal) return;
-    const res = await fetch(`/api/ap/review/${form.id}/approve`, {
+    // Phase 11.2 — clean-path approve cannot fire while blocking
+    // findings are present; the route would 422 anyway. The check here
+    // prevents a misclick when the override modal is closed.
+    if (hasBlockingFindings && !overridePayload) return;
+    setError(null);
+    const init: RequestInit = {
       method: "POST",
-      headers: { "Idempotency-Key": crypto.randomUUID() },
-    });
+      headers: {
+        "Content-Type": "application/json",
+        "Idempotency-Key": crypto.randomUUID(),
+      },
+      body: overridePayload
+        ? JSON.stringify({
+            overrideJustification: overridePayload.overrideJustification,
+            secondApproverId: overridePayload.secondApproverId ?? undefined,
+          })
+        : "{}",
+    };
+    const res = await fetch(`/api/ap/review/${form.id}/approve`, init);
     if (!res.ok) {
       const j = await res.json().catch(() => ({}));
       setError(j.message ?? j.error ?? `HTTP ${res.status}`);
       return;
     }
+    setOverrideOpen(false);
     router.refresh();
   }
 
-  async function handleReject() {
+  async function handleReject(payload: { reasonCode: string; note?: string }) {
     if (!canReject || isTerminal) return;
-    const reason = window.prompt("Reason for rejection?")?.trim();
-    if (!reason) return;
+    setError(null);
     const res = await fetch(`/api/ap/review/${form.id}/reject`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         "Idempotency-Key": crypto.randomUUID(),
       },
-      body: JSON.stringify({ reason }),
+      body: JSON.stringify(payload),
     });
     if (!res.ok) {
       const j = await res.json().catch(() => ({}));
       setError(j.message ?? j.error ?? `HTTP ${res.status}`);
       return;
     }
+    setRejectOpen(false);
     router.refresh();
   }
 
   return (
-    // Phase 8 — spec §7.2: Source 40% / Extracted 30% / Briefing+Coaching 30%.
-    // minmax(0, …) prevents long line-item descriptions from blowing out
-    // the column widths.
+    <>
+    {/* Phase 11.2 — F02 modals live as siblings to the grid so the
+        backdrop covers the full viewport. State + handlers are owned
+        by the parent so the modal is a controlled component. */}
+    {overrideOpen && (
+      <OverrideModal
+        invoiceId={form.id}
+        blockingFindings={blockingFindings}
+        onCancel={() => setOverrideOpen(false)}
+        onSubmit={(payload) => handleApprove(payload)}
+      />
+    )}
+    {rejectOpen && (
+      <RejectModal
+        onCancel={() => setRejectOpen(false)}
+        onSubmit={(payload) => handleReject(payload)}
+      />
+    )}
+    {/* Phase 8 — spec §7.2: Source 40% / Extracted 30% / Briefing+Coaching 30%.
+        minmax(0, …) prevents long line-item descriptions from blowing out
+        the column widths. */}
     <div className="grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,40fr)_minmax(0,30fr)_minmax(0,30fr)]">
       {/* ── Column 1: Source Document ────────────────────────────────── */}
       <div className="rounded-md border border-gray-200 bg-white p-2">
@@ -291,8 +372,43 @@ export default function ReviewDetailClient(props: Props) {
               <span className="rounded bg-gray-100 px-2 py-0.5 text-xs uppercase tracking-wide text-gray-700">
                 {form.reviewStatus}
               </span>
+              {/* Phase 11.2 — F02 override badge. Surfaced once an
+                  override row exists for this invoice. The tooltip
+                  carries the second-approver name and waived finding
+                  codes; click target is the badge itself so an auditor
+                  reading the page can spot the override at a glance. */}
+              {props.override && (
+                <span
+                  title={
+                    `Approved via Stop Work Authority on ${props.override.approvedAt.slice(0, 16).replace("T", " ")}` +
+                    (props.override.secondApprover
+                      ? ` · co-approver: ${props.override.secondApprover}`
+                      : "") +
+                    (props.override.blockingFindingCodes.length > 0
+                      ? ` · waived: ${props.override.blockingFindingCodes.join(", ")}`
+                      : "")
+                  }
+                  className="rounded border border-red-300 bg-red-50 px-2 py-0.5 text-xs font-semibold uppercase tracking-wide text-red-800"
+                >
+                  Override
+                </span>
+              )}
             </div>
           </div>
+
+          {/* Phase 11.2 — F02 Override Required banner. Visible only
+              while the invoice is still in a reviewable state AND
+              blocking findings remain. Once approved (override or
+              clean) the banner is suppressed — the override badge by
+              the status pill carries that signal post-fact. */}
+          {hasBlockingFindings && !isTerminal && (
+            <OverrideBanner
+              canOverride={props.canOverride}
+              canApprove={canApprove}
+              blockingCodes={blockingFindings.map((f) => f.code)}
+              onOpen={() => setOverrideOpen(true)}
+            />
+          )}
 
           <div className="grid grid-cols-2 gap-3">
             {FIELDS.map((k) => (
@@ -330,15 +446,43 @@ export default function ReviewDetailClient(props: Props) {
             >
               {saving ? "Saving…" : "Save edits"}
             </button>
+            {/* Phase 11.2 — Three approve paths:
+                  · no blocking findings → green Approve (existing)
+                  · blocking + canOverride → red Override & Approve
+                  · blocking + !canOverride → disabled hint
+                The gate is enforced server-side in the approve route;
+                the UI just mirrors it so the reviewer isn't lured into
+                a guaranteed 422. */}
+            {hasBlockingFindings ? (
+              props.canOverride ? (
+                <button
+                  onClick={() => setOverrideOpen(true)}
+                  disabled={!canApprove || isTerminal}
+                  className="rounded-md bg-red-700 px-3 py-1.5 text-sm font-medium text-white hover:bg-red-800 disabled:bg-gray-400"
+                  title="Approve despite blocking validation findings (Stop Work Authority)"
+                >
+                  Override & approve
+                </button>
+              ) : (
+                <button
+                  disabled
+                  className="rounded-md border border-gray-300 bg-gray-100 px-3 py-1.5 text-sm font-medium text-gray-500"
+                  title="An admin or owner must approve this invoice via Stop Work Authority."
+                >
+                  Awaiting admin override
+                </button>
+              )
+            ) : (
+              <button
+                onClick={() => handleApprove()}
+                disabled={!canApprove || isTerminal}
+                className="rounded-md bg-green-700 px-3 py-1.5 text-sm font-medium text-white hover:bg-green-800 disabled:bg-gray-400"
+              >
+                Approve
+              </button>
+            )}
             <button
-              onClick={handleApprove}
-              disabled={!canApprove || isTerminal}
-              className="rounded-md bg-green-700 px-3 py-1.5 text-sm font-medium text-white hover:bg-green-800 disabled:bg-gray-400"
-            >
-              Approve
-            </button>
-            <button
-              onClick={handleReject}
+              onClick={() => setRejectOpen(true)}
               disabled={!canReject || isTerminal}
               className="rounded-md border border-red-300 bg-white px-3 py-1.5 text-sm font-medium text-red-700 hover:bg-red-50 disabled:border-gray-200 disabled:text-gray-400"
             >
@@ -543,18 +687,435 @@ export default function ReviewDetailClient(props: Props) {
             Audit history ({props.audits.length})
           </summary>
           <ul className="mt-2 space-y-1 text-xs text-gray-700">
-            {props.audits.map((a) => (
-              <li key={a.id} className="flex justify-between">
-                <span>
-                  <span className="font-mono">{a.action}</span> by {a.actorType}
-                </span>
-                <span className="text-gray-500">
-                  {a.createdAt.slice(0, 16).replace("T", " ")}
-                </span>
+            {props.audits.map((a) => {
+              // Phase 11.2 — surface override + denial events distinctly.
+              // The action name is the source of truth (auditor reads it
+              // verbatim); the row tint just helps them spot it.
+              const isOverride =
+                a.action === "invoice.override_recorded" ||
+                a.action === "invoice.override";
+              const isDenial = a.action === "invoice.sod_denied";
+              const rowClass = isOverride
+                ? "rounded bg-red-50 px-1.5 py-0.5 text-red-900"
+                : isDenial
+                  ? "rounded bg-amber-50 px-1.5 py-0.5 text-amber-900"
+                  : "";
+              return (
+                <li key={a.id} className={`flex justify-between ${rowClass}`}>
+                  <span>
+                    <span className="font-mono font-medium">{a.action}</span>{" "}
+                    by {a.actorType}
+                  </span>
+                  <span className="text-gray-500">
+                    {a.createdAt.slice(0, 16).replace("T", " ")}
+                  </span>
+                </li>
+              );
+            })}
+          </ul>
+        </details>
+      </div>
+    </div>
+    </>
+  );
+}
+
+/**
+ * Phase 11.2 — F02 Stop Work Authority banner.
+ *
+ * Rendered at the top of the extracted-fields panel when blocking
+ * validation findings remain on a non-terminal invoice. The copy
+ * branches on canOverride: when the caller is admin/owner, we tell
+ * them they're the one who has to make the call; otherwise we tell
+ * them to escalate. The action button is the only path to the
+ * override modal — the regular Approve button is suppressed by the
+ * gate logic in the parent.
+ */
+function OverrideBanner({
+  canOverride,
+  canApprove,
+  blockingCodes,
+  onOpen,
+}: {
+  canOverride: boolean;
+  canApprove: boolean;
+  blockingCodes: string[];
+  onOpen: () => void;
+}) {
+  return (
+    <div className="mt-3 rounded-md border border-red-300 bg-red-50 p-3">
+      <div className="flex items-start justify-between gap-3">
+        <div className="flex-1">
+          <p className="text-sm font-semibold text-red-900">
+            Override required — blocking validation findings
+          </p>
+          <p className="mt-1 text-xs leading-snug text-red-900">
+            This invoice has {blockingCodes.length} blocking finding
+            {blockingCodes.length === 1 ? "" : "s"} (
+            <span className="font-mono">{blockingCodes.join(", ")}</span>).
+            {canOverride
+              ? " Resolve via Save edits, or exercise Stop Work Authority to approve despite the gate."
+              : " Resolve via Save edits, or escalate to an admin/owner who can exercise Stop Work Authority."}
+          </p>
+        </div>
+        {canOverride && canApprove && (
+          <button
+            type="button"
+            onClick={onOpen}
+            className="shrink-0 rounded-md border border-red-700 bg-white px-2 py-1 text-xs font-medium text-red-800 hover:bg-red-100"
+          >
+            Open override
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+interface ApproverOption {
+  id: string;
+  name: string | null;
+  email: string;
+  role: string;
+}
+
+/**
+ * Phase 11.2 — F02 Override modal.
+ *
+ * Two-step flow:
+ *   1. Edit — write justification (≥20 chars enforced client-side AND
+ *      server-side), optionally pick a second approver from the
+ *      org's admin+owner roster.
+ *   2. Confirm — read-only preview of the blocking findings + the
+ *      justification + the second approver. The submit button is in
+ *      step 2 only; step 1 cannot accidentally fire the approve.
+ *
+ * The approvers list is fetched once on mount. Failure is non-fatal:
+ * the picker collapses to a "(unavailable — proceed without)" hint;
+ * the modal still works with no second approver, which matches the
+ * F02 spec (recommended, not required, in the MVP).
+ */
+function OverrideModal({
+  invoiceId,
+  blockingFindings,
+  onCancel,
+  onSubmit,
+}: {
+  invoiceId: string;
+  blockingFindings: Finding[];
+  onCancel: () => void;
+  onSubmit: (payload: {
+    overrideJustification: string;
+    secondApproverId: string | null;
+  }) => void | Promise<void>;
+}) {
+  const [step, setStep] = useState<"edit" | "confirm">("edit");
+  const [justification, setJustification] = useState("");
+  const [secondApproverId, setSecondApproverId] = useState<string>("");
+  const [approvers, setApprovers] = useState<ApproverOption[] | null>(null);
+  const [approversError, setApproversError] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch("/api/ap/users/approvers");
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const j = (await res.json()) as { approvers: ApproverOption[] };
+        if (!cancelled) setApprovers(j.approvers ?? []);
+      } catch {
+        if (!cancelled) setApproversError(true);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const trimmed = justification.trim();
+  const tooShort = trimmed.length < OVERRIDE_MIN_JUSTIFICATION;
+  const selectedApprover = approvers?.find((a) => a.id === secondApproverId) ?? null;
+
+  async function doSubmit() {
+    if (tooShort || submitting) return;
+    setSubmitting(true);
+    try {
+      await onSubmit({
+        overrideJustification: trimmed,
+        secondApproverId: secondApproverId || null,
+      });
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+      role="dialog"
+      aria-modal="true"
+      aria-label="Stop Work Authority override"
+    >
+      <div className="w-full max-w-lg rounded-lg bg-white p-5 shadow-xl">
+        <div className="mb-3 flex items-center justify-between">
+          <div>
+            <h2 className="text-base font-semibold text-gray-900">
+              Stop Work Authority override
+            </h2>
+            <p className="mt-0.5 text-xs text-gray-500">
+              Invoice <span className="font-mono">{invoiceId.slice(0, 8)}…</span>{" "}
+              · Step {step === "edit" ? "1" : "2"} of 2
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onCancel}
+            className="rounded px-2 py-0.5 text-xs text-gray-500 hover:bg-gray-100 hover:text-gray-800"
+            aria-label="Close override modal"
+          >
+            ✕
+          </button>
+        </div>
+
+        {/* Blocking findings — read-only in both steps so the approver
+            is never far from what they're waiving. */}
+        <div className="mb-3 rounded-md border border-red-200 bg-red-50 p-3">
+          <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-red-900">
+            Waiving {blockingFindings.length} blocking finding
+            {blockingFindings.length === 1 ? "" : "s"}
+          </p>
+          <ul className="space-y-0.5 text-xs text-red-900">
+            {blockingFindings.map((f) => (
+              <li key={f.code}>
+                <span className="font-mono">{f.code}</span> — {f.message}
               </li>
             ))}
           </ul>
-        </details>
+        </div>
+
+        {step === "edit" ? (
+          <>
+            <label className="block text-xs font-medium text-gray-700">
+              Justification
+              <textarea
+                value={justification}
+                onChange={(e) => setJustification(e.target.value)}
+                rows={4}
+                placeholder="Explain why this invoice should be approved despite the blocking findings. Minimum 20 characters."
+                className="mt-1 w-full rounded-md border border-gray-300 px-2 py-1.5 text-sm focus:border-gray-900 focus:outline-none"
+              />
+            </label>
+            <div className="mt-1 flex items-center justify-between text-[11px]">
+              <span className={tooShort ? "text-red-700" : "text-gray-500"}>
+                {tooShort
+                  ? `${OVERRIDE_MIN_JUSTIFICATION - trimmed.length} more character${OVERRIDE_MIN_JUSTIFICATION - trimmed.length === 1 ? "" : "s"} required`
+                  : "Justification persisted to invoice_override_log (append-only)."}
+              </span>
+              <span className="font-mono text-gray-400">
+                {trimmed.length}/{OVERRIDE_MIN_JUSTIFICATION}+
+              </span>
+            </div>
+
+            <label className="mt-3 block text-xs font-medium text-gray-700">
+              Second approver{" "}
+              <span className="font-normal text-gray-500">
+                (recommended — admin or owner)
+              </span>
+              {approversError ? (
+                <p className="mt-1 text-[11px] italic text-gray-500">
+                  Approver list unavailable — proceeding without a second
+                  approver is permitted in the MVP.
+                </p>
+              ) : approvers === null ? (
+                <p className="mt-1 text-[11px] italic text-gray-500">
+                  Loading approvers…
+                </p>
+              ) : (
+                <select
+                  value={secondApproverId}
+                  onChange={(e) => setSecondApproverId(e.target.value)}
+                  className="mt-1 w-full rounded-md border border-gray-300 px-2 py-1.5 text-sm focus:border-gray-900 focus:outline-none"
+                >
+                  <option value="">— None —</option>
+                  {approvers.map((a) => (
+                    <option key={a.id} value={a.id}>
+                      {a.name ?? a.email} ({a.role})
+                    </option>
+                  ))}
+                </select>
+              )}
+            </label>
+
+            <div className="mt-5 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={onCancel}
+                className="rounded-md border border-gray-300 px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => setStep("confirm")}
+                disabled={tooShort}
+                className="rounded-md bg-gray-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-gray-800 disabled:bg-gray-400"
+              >
+                Review →
+              </button>
+            </div>
+          </>
+        ) : (
+          <>
+            <div className="space-y-3 text-xs">
+              <div>
+                <p className="font-semibold uppercase tracking-wide text-gray-500">
+                  Justification
+                </p>
+                <p className="mt-1 whitespace-pre-wrap rounded bg-gray-50 p-2 text-sm text-gray-900">
+                  {trimmed}
+                </p>
+              </div>
+              <div>
+                <p className="font-semibold uppercase tracking-wide text-gray-500">
+                  Second approver
+                </p>
+                <p className="mt-1 text-sm text-gray-900">
+                  {selectedApprover
+                    ? `${selectedApprover.name ?? selectedApprover.email} (${selectedApprover.role})`
+                    : "— None —"}
+                </p>
+              </div>
+              <p className="rounded border border-amber-300 bg-amber-50 p-2 text-[11px] leading-snug text-amber-900">
+                This action records an immutable row in{" "}
+                <span className="font-mono">invoice_override_log</span> and
+                emits an <span className="font-mono">invoice.override_recorded</span>{" "}
+                audit event. Both are append-only.
+              </p>
+            </div>
+            <div className="mt-5 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setStep("edit")}
+                className="rounded-md border border-gray-300 px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-50"
+              >
+                ← Edit
+              </button>
+              <button
+                type="button"
+                onClick={doSubmit}
+                disabled={submitting}
+                className="rounded-md bg-red-700 px-3 py-1.5 text-sm font-medium text-white hover:bg-red-800 disabled:bg-gray-400"
+              >
+                {submitting ? "Submitting…" : "Override & approve"}
+              </button>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Phase 11.2 — Reject modal. Replaces the prior window.prompt path
+ * with a reasonCode picker (matching the PR19 enum) and an optional
+ * free-text note. The note is NOT persisted on audit_events (per
+ * PR19); the route stores it on the invoice's warningsJson only.
+ */
+function RejectModal({
+  onCancel,
+  onSubmit,
+}: {
+  onCancel: () => void;
+  onSubmit: (payload: { reasonCode: string; note?: string }) => void | Promise<void>;
+}) {
+  const [reasonCode, setReasonCode] = useState(REJECT_REASONS[0].code);
+  const [note, setNote] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+
+  async function doSubmit() {
+    if (submitting) return;
+    setSubmitting(true);
+    try {
+      await onSubmit({
+        reasonCode,
+        note: note.trim() ? note.trim().slice(0, 280) : undefined,
+      });
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+      role="dialog"
+      aria-modal="true"
+      aria-label="Reject invoice"
+    >
+      <div className="w-full max-w-md rounded-lg bg-white p-5 shadow-xl">
+        <div className="mb-3 flex items-center justify-between">
+          <h2 className="text-base font-semibold text-gray-900">
+            Reject invoice
+          </h2>
+          <button
+            type="button"
+            onClick={onCancel}
+            className="rounded px-2 py-0.5 text-xs text-gray-500 hover:bg-gray-100 hover:text-gray-800"
+            aria-label="Close reject modal"
+          >
+            ✕
+          </button>
+        </div>
+
+        <label className="block text-xs font-medium text-gray-700">
+          Reason
+          <select
+            value={reasonCode}
+            onChange={(e) => setReasonCode(e.target.value)}
+            className="mt-1 w-full rounded-md border border-gray-300 px-2 py-1.5 text-sm focus:border-gray-900 focus:outline-none"
+          >
+            {REJECT_REASONS.map((r) => (
+              <option key={r.code} value={r.code}>
+                {r.label}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <label className="mt-3 block text-xs font-medium text-gray-700">
+          Note <span className="font-normal text-gray-500">(optional, max 280)</span>
+          <textarea
+            value={note}
+            onChange={(e) => setNote(e.target.value)}
+            rows={3}
+            maxLength={280}
+            placeholder="Optional context for your team. NOT written to the audit log."
+            className="mt-1 w-full rounded-md border border-gray-300 px-2 py-1.5 text-sm focus:border-gray-900 focus:outline-none"
+          />
+          <span className="mt-0.5 block text-right font-mono text-[10px] text-gray-400">
+            {note.length}/280
+          </span>
+        </label>
+
+        <div className="mt-5 flex justify-end gap-2">
+          <button
+            type="button"
+            onClick={onCancel}
+            className="rounded-md border border-gray-300 px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-50"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={doSubmit}
+            disabled={submitting}
+            className="rounded-md bg-red-700 px-3 py-1.5 text-sm font-medium text-white hover:bg-red-800 disabled:bg-gray-400"
+          >
+            {submitting ? "Submitting…" : "Reject"}
+          </button>
+        </div>
       </div>
     </div>
   );

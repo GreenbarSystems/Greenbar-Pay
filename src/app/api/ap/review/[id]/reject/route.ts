@@ -20,53 +20,11 @@ import {
   pickFields,
   INVOICE_HEADER_FIELDS,
 } from "@/lib/route-helpers";
+// Phase 11.2 — schemas extracted to ./body-schema so the modal-contract
+// test imports them without pulling auth/drizzle at test-import time.
+import { RejectReasonCode, RejectSchema } from "./body-schema";
 
-/**
- * PR19 — controlled-vocabulary rejection reason.
- *
- * The free-text `reason` field was a PII channel: reviewers could (and
- * did, per pilot review feedback) type vendor names, account numbers,
- * EINs, or personal notes about employees, all of which persisted
- * unscrubbed in audit_events.metadata_json. The fix is an enum of
- * canonical reject codes; an optional `note` field captures the
- * reviewer's free text but is capped, scrubbed, and explicitly NOT
- * stored on audit_events (only on the rejected invoice row's
- * warningsJson for in-app context).
- *
- * The enum can be extended; each new code lands in the briefing
- * card's coaching prompts and the recompute job's vendor-pattern
- * analysis without a schema change.
- */
-export const RejectReasonCode = z.enum([
-  "not_an_invoice",
-  "duplicate_submission",
-  "wrong_vendor",
-  "wrong_amount",
-  "missing_information",
-  "policy_violation",
-  "other",
-]);
-
-const RejectSchema = z
-  .object({
-    reasonCode: RejectReasonCode.optional(),
-    /** Optional free-text note. NOT persisted on audit_events. */
-    note: z.string().max(280).optional(),
-    /**
-     * Backward-compatibility — the prior client posted { reason:
-     * string }. We accept it, coerce to reasonCode="other", and
-     * discard the free text rather than persisting it on the audit
-     * row. UI migration to the picker is a follow-up PR.
-     */
-    reason: z.string().max(280).optional(),
-  })
-  .refine((b) => b.reasonCode || b.reason, {
-    message: "reasonCode or reason is required",
-  })
-  .transform((b) => ({
-    reasonCode: b.reasonCode ?? "other",
-    note: b.note,
-  }));
+export { RejectReasonCode };
 
 export async function POST(
   req: Request,
