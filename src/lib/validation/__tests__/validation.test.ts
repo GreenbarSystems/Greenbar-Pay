@@ -7,7 +7,24 @@ import {
   MATH_TOLERANCE,
 } from "@/lib/validation";
 
-const goodInvoice = {
+// Typecheck-sweep — explicit nullable types so individual tests can
+// override with `null` without the literal-narrowing inference
+// rejecting the override (validateInvoice's actual input shape
+// allows null on most string fields).
+const goodInvoice: {
+  documentType: string;
+  vendorName: string | null;
+  invoiceNumber: string | null;
+  invoiceDate: string | null;
+  dueDate: string | null;
+  currency: string | null;
+  subtotal: number | null;
+  tax: number | null;
+  shipping: number | null;
+  discount: number | null;
+  total: number | null;
+  lineItems: Array<Record<string, unknown>>;
+} = {
   documentType: "invoice",
   vendorName: "ABC Supplies LLC",
   invoiceNumber: "INV-10492",

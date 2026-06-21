@@ -60,6 +60,15 @@ beforeAll(async () => {
       invoiceNumber: "INV-1",
       total: "100.00",
       reviewStatus: "needs_review",
+      // Issue #3 fix: pin updated_at to millisecond precision so the
+      // value round-trips losslessly through JS Date. Postgres `now()`
+      // produces microsecond precision; reading it back as a Date
+      // truncates, and subsequent WHERE updated_at = $ifMatch never
+      // matches because Postgres compares the stored microsecond
+      // value against the truncated millisecond Date. The real PATCH
+      // route handles this by selecting updated_at as a string; here
+      // we pin to millisecond precision at insert time.
+      updatedAt: sql`date_trunc('milliseconds', now())`,
     })
     .returning({ id: extractedInvoices.id, updatedAt: extractedInvoices.updatedAt });
   invoiceId = inv.id;

@@ -11,7 +11,18 @@ import { describe, it, expect } from "vitest";
 import { computeCoachingPrompts } from "@/lib/coaching/compute";
 import type { ValidationFinding } from "@/lib/validation";
 
-const baseInvoice = {
+// Typecheck-sweep — explicit field types let individual tests override
+// with number | null and string | null without the literal-narrowing
+// inference rejecting the override.
+const baseInvoice: {
+  total: number;
+  currency: string;
+  paymentTerms: string | null;
+  invoiceDate: string | null;
+  dueDate: string | null;
+  discountPct: number | null;
+  discountAmount: number | null;
+} = {
   total: 1000,
   currency: "USD",
   paymentTerms: "Net 30",
@@ -21,7 +32,12 @@ const baseInvoice = {
   discountAmount: null,
 };
 
-const baseVendor = {
+const baseVendor: {
+  invoiceCount: number;
+  spend30d: string;
+  avgInvoiceAmount: string;
+  defaultPaymentTerms: string | null;
+} = {
   invoiceCount: 12,
   spend30d: "2000",
   avgInvoiceAmount: "500",
@@ -49,8 +65,13 @@ describe("computeCoachingPrompts", () => {
   it("returns an empty array when no triggers fire", () => {
     // Boring invoice: matches terms, total is unremarkable, no new
     // lines, projected spend stays within run-rate.
+    //
+    // Issue #3 fix: spend30d="100" + total=400 actually fires
+    // cumulative_spend_alert (baseline=spend30=100 since >0, projected
+    // 500 / 100 = 5× > 1.5× trigger). Use spend30d="2000" so projected
+    // 2400 / 2000 = 1.2× and the alert correctly stays silent.
     const r = computeCoachingPrompts(
-      inputs({ invoice: { total: 400 }, vendorProfile: { spend30d: "100" } }),
+      inputs({ invoice: { total: 400 }, vendorProfile: { spend30d: "2000" } }),
     );
     expect(r).toEqual([]);
   });

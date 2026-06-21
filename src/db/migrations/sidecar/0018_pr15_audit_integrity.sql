@@ -19,13 +19,40 @@
 --    invoice.override_recorded preceded invoice.approved. A bigserial
 --    column tie-breaks: same created_at, monotonically-increasing
 --    seq, ordering becomes deterministic.
+--
+-- Issue #3 fix: the original DROP CONSTRAINT IF EXISTS lines used
+-- Postgres-default constraint names (`evidence_packets_*_fkey`), but
+-- drizzle-kit init.sql names FKs `<table>_<col>_<reftable>_<refcol>_fk`.
+-- IF EXISTS made the drops silent no-ops, so the CASCADE FKs stayed
+-- and the `no_delete` RULES then conflicted with internal FK trigger
+-- queries. Look up actual FK names from pg_constraint and drop those.
 
 -- ── 1. FK cascade → RESTRICT ───────────────────────────────────────
-ALTER TABLE evidence_packets
-  DROP CONSTRAINT IF EXISTS evidence_packets_organization_id_fkey,
-  DROP CONSTRAINT IF EXISTS evidence_packets_extracted_invoice_id_fkey,
-  DROP CONSTRAINT IF EXISTS evidence_packets_document_id_fkey,
-  DROP CONSTRAINT IF EXISTS evidence_packets_sealed_by_user_id_fkey;
+-- Drop whatever FK constraints currently exist on the relevant columns
+-- (drizzle-generated or Postgres-default), then re-add the RESTRICT
+-- versions under canonical names.
+DO $$
+DECLARE
+  c text;
+BEGIN
+  -- evidence_packets
+  FOR c IN
+    SELECT conname FROM pg_constraint
+    WHERE conrelid = 'evidence_packets'::regclass
+      AND contype = 'f'
+  LOOP
+    EXECUTE format('ALTER TABLE evidence_packets DROP CONSTRAINT %I', c);
+  END LOOP;
+  -- invoice_override_log
+  FOR c IN
+    SELECT conname FROM pg_constraint
+    WHERE conrelid = 'invoice_override_log'::regclass
+      AND contype = 'f'
+  LOOP
+    EXECUTE format('ALTER TABLE invoice_override_log DROP CONSTRAINT %I', c);
+  END LOOP;
+END $$;
+
 ALTER TABLE evidence_packets
   ADD CONSTRAINT evidence_packets_organization_id_fkey
     FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE RESTRICT,
@@ -36,12 +63,6 @@ ALTER TABLE evidence_packets
   ADD CONSTRAINT evidence_packets_sealed_by_user_id_fkey
     FOREIGN KEY (sealed_by_user_id) REFERENCES users(id) ON DELETE SET NULL;
 
-ALTER TABLE invoice_override_log
-  DROP CONSTRAINT IF EXISTS invoice_override_log_organization_id_fkey,
-  DROP CONSTRAINT IF EXISTS invoice_override_log_extracted_invoice_id_fkey,
-  DROP CONSTRAINT IF EXISTS invoice_override_log_document_id_fkey,
-  DROP CONSTRAINT IF EXISTS invoice_override_log_overriding_user_id_fkey,
-  DROP CONSTRAINT IF EXISTS invoice_override_log_second_approver_id_fkey;
 ALTER TABLE invoice_override_log
   ADD CONSTRAINT invoice_override_log_organization_id_fkey
     FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE RESTRICT,

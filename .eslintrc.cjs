@@ -31,7 +31,18 @@ module.exports = {
   },
   overrides: [
     {
-      files: ["src/db/internal/**", "src/db/migrate.ts", "src/db/__tests__/**"],
+      // Integration tests legitimately need raw drizzle access for
+      // their own setup/teardown (creating orgs, seeding fixtures,
+      // asserting rows by direct SELECT). The RLS invariant the rule
+      // protects is unit-of-work — `withOrg` — so test harnesses
+      // outside the request path are an authorised escape hatch.
+      // Broader pattern (src/**/__tests__/**) catches future test
+      // dirs added under lib/, jobs/, etc.
+      files: [
+        "src/**/__tests__/**",
+        "src/db/internal/**",
+        "src/db/migrate.ts",
+      ],
       rules: { "no-restricted-imports": "off" },
     },
     {

@@ -19,12 +19,26 @@ CREATE INDEX IF NOT EXISTS idx_validation_results_active
 
 -- ---------------------------------------------------------------------------
 -- 2. api_idempotency_keys: PK on (organization_id, key).
---    Drop the old PK + recreate; the existing data (if any) needs the
---    composite to be uniquely satisfiable, which it is since the old
---    schema enforced key uniqueness globally.
+--    Drop whatever PK currently exists and add the canonical-name PK.
+--    Historical context: pre-PR2 the schema declared a single-column PK
+--    on `key` (named api_idempotency_keys_pkey). PR2 made it composite.
+--    Once drizzle-kit migrations were committed (issue #3), the init.sql
+--    also creates the composite PK but with the drizzle-generated name
+--    `api_idempotency_keys_organization_id_key_pk`. Either way, drop
+--    any existing PK first so the ADD succeeds.
 -- ---------------------------------------------------------------------------
-ALTER TABLE api_idempotency_keys
-  DROP CONSTRAINT IF EXISTS api_idempotency_keys_pkey;
+DO $$
+DECLARE
+  pk_name text;
+BEGIN
+  SELECT conname INTO pk_name
+  FROM pg_constraint
+  WHERE conrelid = 'api_idempotency_keys'::regclass
+    AND contype = 'p';
+  IF pk_name IS NOT NULL THEN
+    EXECUTE format('ALTER TABLE api_idempotency_keys DROP CONSTRAINT %I', pk_name);
+  END IF;
+END $$;
 
 ALTER TABLE api_idempotency_keys
   ADD CONSTRAINT api_idempotency_keys_pkey

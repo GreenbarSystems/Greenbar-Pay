@@ -79,7 +79,13 @@ afterAll(async () => {
   await pool.end();
 });
 
-describe("AP inbox ingest", () => {
+// Issue #3 — the inbox ingest test exercises the storage subsystem
+// (putObject + getObject against S3 / MinIO). CI doesn't bring up
+// MinIO, so the test cannot run there. Skip when no S3 creds are
+// configured; run locally / in a future CI workflow that provisions
+// MinIO. The skipIf gate at the suite level avoids hitting beforeAll's
+// putObject when there's no storage to write to.
+describe.skipIf(!process.env.S3_ACCESS_KEY_ID)("AP inbox ingest", () => {
   it("ingests a routed message and writes one document", async () => {
     const result = await ingestEmlMessage({
       rawMessageStorageKey: storageKey,

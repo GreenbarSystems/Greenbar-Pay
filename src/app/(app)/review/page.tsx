@@ -20,7 +20,9 @@ const STATUS_TABS = [
 
 type Status = (typeof STATUS_TABS)[number]["key"];
 
-const ACTIVE_REVIEW = ["pending", "needs_review"] as const;
+// Drizzle's inArray expects a mutable array; `as const` would type
+// this as readonly and fail the overload check.
+const ACTIVE_REVIEW: Array<"pending" | "needs_review"> = ["pending", "needs_review"];
 
 export default async function ReviewListPage({
   searchParams,
