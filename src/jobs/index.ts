@@ -12,6 +12,7 @@ import { handleRecomputeVendorProfile } from "./recomputeVendorProfile";
 import { handleGenerateBriefingCard } from "./generateBriefingCard";
 import { handleAssembleEvidencePacket } from "./assembleEvidencePacket";
 import { handleExtractContractData } from "./extractContractData";
+import { handleCaptureAndEmbedCorrection } from "./captureAndEmbedCorrection";
 
 type Handler<N extends keyof JobPayloads> = (
   job: PgBoss.Job<JobPayloads[N]>,
@@ -94,5 +95,13 @@ export const HANDLERS: Array<{
     name: JOB.extractContractData,
     options: { batchSize: 1 },
     handler: handleExtractContractData as Handler<keyof JobPayloads>,
+  },
+  {
+    // Slice 2 — correction capture + Voyage AI embedding. Network-bound
+    // (one REST call per job); batchSize 4 keeps enough concurrency to
+    // drain a burst of approvals without overwhelming the embedding API.
+    name: JOB.captureAndEmbedCorrection,
+    options: { batchSize: 4 },
+    handler: handleCaptureAndEmbedCorrection as Handler<keyof JobPayloads>,
   },
 ];

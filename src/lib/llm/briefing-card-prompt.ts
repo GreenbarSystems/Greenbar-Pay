@@ -87,6 +87,19 @@ Rules:
       would identify the invoice (e.g. "about $4k" not "$3,987.42").
   These fields persist in plain text and surface in evidence packets;
   they must be re-readable without leaking customer payload.
+- reviewerSignals: if present, these are past corrections a reviewer made
+  on similar invoices from this vendor. For each signal, check whether
+  any of the flagged fields appear in today's invoice. If so, add an
+  anomalyFlag with:
+    code: "reviewer_pattern"
+    severity: "warning"
+    message: one plain-English sentence describing what was corrected
+              and why today's invoice should be double-checked.
+    evidenceChain:
+      [{label: "Evidence", detail: "Reviewer corrected [list of fields] on a past invoice from this vendor"},
+       {label: "Recommendation", detail: "Verify [fields] manually before approving"}]
+  Omit reviewer_pattern flags when reviewerSignals is null, empty, or none
+  of the flagged fields appear in the current invoice.
 - Return only the tool call.`;
 
 export interface BriefingPromptInput {
@@ -100,6 +113,18 @@ export interface BriefingPromptInput {
   priorInvoice: BriefingPriorInvoice | null;
   /** Deterministic 0–100 risk score the LLM is asked to justify. */
   riskScore: number;
+  /**
+   * Past reviewer corrections on similar invoices from this vendor.
+   * Null when no corrections exist yet (early in the pilot) or when
+   * VOYAGE_API_KEY is unset and no vendor_id fallback matched.
+   * The LLM uses these to emit reviewer_pattern anomaly flags.
+   */
+  reviewerSignals: Array<{
+    /** Header fields the reviewer corrected, e.g. ["vendorName","total"]. */
+    fields: string[];
+    /** ISO timestamp of the approval that confirmed the correction. */
+    confirmedAt: string;
+  }> | null;
   /**
    * Contributing factors so the prose can reference them.
    *
@@ -164,6 +189,7 @@ export function buildBriefingCardPrompt(input: BriefingPromptInput): BuiltPrompt
       priorInvoice: input.priorInvoice,
       riskScore: input.riskScore,
       riskFactors: input.riskFactors,
+      reviewerSignals: input.reviewerSignals ?? null,
     },
     null,
     2,

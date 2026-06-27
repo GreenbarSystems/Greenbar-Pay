@@ -585,6 +585,28 @@ export async function POST(
         }
       }
 
+      // Slice 2 — enqueue correction capture + embedding after every
+      // approved invoice. The job checks whether any reviewer edits
+      // existed before approval; if not, it exits quickly. Same
+      // fire-and-forget pattern as recomputeVendorProfile above.
+      if (txResult.status === 200) {
+        try {
+          const boss = await getQueue();
+          await boss.send(
+            JOB.captureAndEmbedCorrection,
+            { extractedInvoiceId: params.id, organizationId },
+            {
+              singletonKey: `capture-and-embed-correction:${params.id}`,
+            },
+          );
+        } catch (err) {
+          console.warn(
+            `[approve] capture-and-embed-correction enqueue failed for invoice=${params.id}; approve committed, correction flywheel will miss this invoice`,
+            scrubError(err),
+          );
+        }
+      }
+
       return { status: txResult.status, body: txResult.body };
     },
   );

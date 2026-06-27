@@ -62,6 +62,8 @@ export const JOB = {
   assembleEvidencePacket: "assemble-evidence-packet",
   // Phase 9.5 — D3 second half
   extractContractData: "extract-contract-data",
+  // Slice 2 — correction-aware RAG flywheel
+  captureAndEmbedCorrection: "capture-and-embed-correction",
 } as const;
 
 export type JobPayloads = {
@@ -84,6 +86,11 @@ export type JobPayloads = {
   // Phase 9.5 — D3 second half. Same shape as extract-invoice-data.
   [JOB.extractContractData]: {
     documentId: string;
+    organizationId: string;
+  };
+  // Slice 2 — capture reviewer corrections + generate voyage-3 embedding.
+  [JOB.captureAndEmbedCorrection]: {
+    extractedInvoiceId: string;
     organizationId: string;
   };
 };

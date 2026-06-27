@@ -52,6 +52,10 @@ import { computeCoachingPrompts } from "@/lib/coaching/compute";
 import type { ValidationFinding } from "@/lib/validation";
 import { dispatchBriefingCardGeneration } from "@/lib/llm";
 import { scrubError } from "@/lib/llm/scrub";
+import {
+  retrieveSimilarCorrections,
+  buildQueryContextText,
+} from "@/lib/corrections";
 import type { JobPayloads } from "@/lib/queue";
 import { JOB } from "@/lib/queue";
 
@@ -304,10 +308,36 @@ export async function handleGenerateBriefingCard(
       priorInvoice,
       priorLines,
       risk,
+      // Slice 2 — vendor_id for the correction fallback retrieval.
+      vendorId: latestMatch?.vendorId ?? null,
+      // Context text for the pgvector embedding query (Voyage AI).
+      queryContextText: buildQueryContextText({
+        vendorName: invoice.vendorName,
+        lineDescriptions: lines.map((l) => l.description),
+        total: numericOrNull(invoice.total),
+      }),
     };
   });
 
   if (!prep) return;
+
+  // Slice 2 — retrieve similar past corrections. Runs outside the tx
+  // because it may call the Voyage AI embedding API (network call).
+  // Falls back to vendor_id match when VOYAGE_API_KEY is unset or when
+  // the API call fails. Errors are swallowed — a missing signal never
+  // blocks the briefing.
+  const reviewerSignals = await retrieveSimilarCorrections({
+    organizationId,
+    vendorId: prep.vendorId,
+    queryContextText: prep.queryContextText,
+    limit: 3,
+  }).catch((err) => {
+    console.warn(
+      `[generate-briefing-card] correction retrieval failed for invoice=${extractedInvoiceId}; proceeding without reviewer signals`,
+      scrubError(err),
+    );
+    return [];
+  });
 
   // Phase 2 — dispatch the LLM. Network call lives outside the tx so
   // we don't hold a row lock across the round trip.
@@ -368,6 +398,8 @@ export async function handleGenerateBriefingCard(
       code: f.code,
       weight: f.weight,
     })),
+    // Slice 2 — reviewer correction signals from similar past invoices.
+    reviewerSignals: reviewerSignals.length > 0 ? reviewerSignals : null,
   });
 
   // Phase 3 — persist outcome.

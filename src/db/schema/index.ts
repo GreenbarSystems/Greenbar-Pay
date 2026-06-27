@@ -21,3 +21,5 @@ export * from "./invoiceOverrideLog";
 export * from "./vendorContracts";
 // Auth.js Email provider — magic-link verification tokens.
 export * from "./verificationTokens";
+// Slice 2 — correction-aware RAG flywheel.
+export * from "./extractionCorrections";
