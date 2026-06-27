@@ -19,3 +19,5 @@ export * from "./evidencePackets";
 export * from "./invoiceOverrideLog";
 // Phase 9.5 — Contract Document Parser (D3 second half).
 export * from "./vendorContracts";
+// Auth.js Email provider — magic-link verification tokens.
+export * from "./verificationTokens";

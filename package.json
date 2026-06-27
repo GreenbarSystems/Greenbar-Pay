@@ -22,11 +22,13 @@
   "dependencies": {
     "@anthropic-ai/sdk": "^0.32.1",
     "@auth/drizzle-adapter": "^1.7.4",
+    "@types/nodemailer": "^6.4.24",
     "dotenv": "^16.4.5",
     "drizzle-orm": "^0.36.4",
     "mailparser": "^3.7.2",
     "next": "14.2.18",
     "next-auth": "5.0.0-beta.25",
+    "nodemailer": "^6.10.1",
     "pdf-parse": "^1.1.1",
     "pdfjs-dist": "^6.0.227",
     "pg": "^8.13.1",
