@@ -3,6 +3,7 @@ import {
   PutObjectCommand,
   GetObjectCommand,
   DeleteObjectCommand,
+  HeadBucketCommand,
 } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import type { ObjectStorage } from ".";
@@ -55,5 +56,24 @@ export const s3Storage: ObjectStorage = {
   },
   async deleteObject(key) {
     await client.send(new DeleteObjectCommand({ Bucket: bucket, Key: key }));
+  },
+  async healthCheck() {
+    const t0 = Date.now();
+    try {
+      await client.send(new HeadBucketCommand({ Bucket: bucket }));
+      return { ok: true, latencyMs: Date.now() - t0 };
+    } catch (err) {
+      // aws-sdk wraps the underlying connection error; .message can be
+      // empty when the request never left the client. Fall through to
+      // .name / .code so the operator sees something actionable.
+      let msg = "Unknown S3 error";
+      if (err instanceof Error) {
+        const code = (err as { code?: string }).code;
+        msg = err.message || code || err.name;
+      } else {
+        msg = String(err);
+      }
+      return { ok: false, latencyMs: Date.now() - t0, error: msg };
+    }
   },
 };
