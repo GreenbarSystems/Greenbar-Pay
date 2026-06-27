@@ -35,6 +35,13 @@ export default async function VendorDetailPage({
   if (!session?.user) return null;
   const { organizationId, role, id: userId } = session.user;
 
+  // PR21 H1 — rate-card unit_price + notes are negotiated commercial
+  // terms. Gate the activeContractLines fetch behind the same
+  // invoice.override permission that admits Upload + Activate in the
+  // UI. Computing this up here so the gating decision is uniform
+  // across data load + UI affordances.
+  const canManageContracts = can(role, "invoice.override");
+
   const data = await withOrg(organizationId, async (tx) => {
     const [vendor] = await tx
       .select()
@@ -151,24 +158,31 @@ export default async function VendorDetailPage({
     // surfaced via the list UI; their full lines are out of scope
     // for the first cut (a "show details" expander can fetch them
     // in a follow-up).
+    //
+    // PR21 H1 — only fetch when the caller has invoice.override. The
+    // unit_price + notes columns are negotiated commercial terms; the
+    // prior shape rendered them in the RSC payload for every viewer,
+    // bookkeeper, and reviewer that reached /vendors/[id]. Same gate
+    // pattern as the pricing-history section (PR20).
     const activeContract = contracts.find((c) => c.status === "active");
-    const activeContractLines = activeContract
-      ? await tx
-          .select({
-            id: vendorContractLines.id,
-            description: vendorContractLines.description,
-            itemKeyword: vendorContractLines.itemKeyword,
-            unitPrice: vendorContractLines.unitPrice,
-            currency: vendorContractLines.currency,
-            priceBasis: vendorContractLines.priceBasis,
-            minQuantity: vendorContractLines.minQuantity,
-            maxQuantity: vendorContractLines.maxQuantity,
-            notes: vendorContractLines.notes,
-          })
-          .from(vendorContractLines)
-          .where(eq(vendorContractLines.contractId, activeContract.id))
-          .orderBy(vendorContractLines.description)
-      : [];
+    const activeContractLines =
+      activeContract && canManageContracts
+        ? await tx
+            .select({
+              id: vendorContractLines.id,
+              description: vendorContractLines.description,
+              itemKeyword: vendorContractLines.itemKeyword,
+              unitPrice: vendorContractLines.unitPrice,
+              currency: vendorContractLines.currency,
+              priceBasis: vendorContractLines.priceBasis,
+              minQuantity: vendorContractLines.minQuantity,
+              maxQuantity: vendorContractLines.maxQuantity,
+              notes: vendorContractLines.notes,
+            })
+            .from(vendorContractLines)
+            .where(eq(vendorContractLines.contractId, activeContract.id))
+            .orderBy(vendorContractLines.description)
+        : [];
 
     return {
       vendor,
@@ -190,9 +204,6 @@ export default async function VendorDetailPage({
     activeContractLines,
   } = data;
   const ready = vendor.invoiceCount >= 3;
-  // Phase 9.5 PR4 — only owner/admin can upload + activate contracts
-  // (mirrors the activate endpoint's invoice.override gate).
-  const canManageContracts = can(role, "invoice.override");
 
   return (
     <div className="space-y-6">

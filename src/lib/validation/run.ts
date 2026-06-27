@@ -13,7 +13,8 @@
  *
  * Returns the findings so the caller can decide review_status transitions.
  */
-import { and, eq, inArray, isNull, sql } from "drizzle-orm";
+import { createHash } from "node:crypto";
+import { and, eq, inArray, isNotNull, isNull, sql } from "drizzle-orm";
 import type { Tx } from "@/db/client";
 import {
   extractedInvoices,
@@ -170,6 +171,7 @@ export async function runValidationInTx(
     ),
     scoreLinesAgainstActiveContract(
       tx,
+      args.organizationId,
       vm.vendorId,
       lines.map((l) => ({
         lineNumber: l.lineNumber,
@@ -385,6 +387,12 @@ export async function runValidationInTx(
         ),
         contractFindingCount: contractScores.findings.length,
         contractFindingCodes: contractScores.findings.map((f) => f.code),
+        // PR21 H2 — bind this audit event to the rate-card content that
+        // was actually used. vendor_contract_lines is mutable; without a
+        // content hash, post-activation edits silently change what the
+        // findings refer to. Phase 11's evidence packet joins on this
+        // event to reconstruct what rates were applied at approval time.
+        contractRateCardHash: contractScores.rateCardHash,
       },
     });
   }
@@ -571,6 +579,7 @@ async function scoreLinesAgainstVendorHistory(
  */
 async function scoreLinesAgainstActiveContract(
   tx: Tx,
+  organizationId: string,
   vendorId: string | null,
   lines: Array<{
     lineNumber: number | null;
@@ -582,16 +591,28 @@ async function scoreLinesAgainstActiveContract(
   findings: ValidationFinding[];
   contractedLineNumbers: Set<number>;
   contractId: string | null;
+  rateCardHash: string | null;
 }> {
   if (!vendorId || lines.length === 0) {
-    return { findings: [], contractedLineNumbers: new Set(), contractId: null };
+    return {
+      findings: [],
+      contractedLineNumbers: new Set(),
+      contractId: null,
+      rateCardHash: null,
+    };
   }
 
+  // PR21 H5 — defence-in-depth: RLS already scopes by org via the
+  // `app.current_org_id` GUC, but every other vendor_contracts read in
+  // this codebase carries an explicit organizationId predicate. Match
+  // the pattern so a future RLS regression doesn't silently widen the
+  // contract surface.
   const [contract] = await tx
     .select({ id: vendorContracts.id })
     .from(vendorContracts)
     .where(
       and(
+        eq(vendorContracts.organizationId, organizationId),
         eq(vendorContracts.vendorId, vendorId),
         eq(vendorContracts.status, "active"),
         isNull(vendorContracts.supersededAt),
@@ -600,39 +621,75 @@ async function scoreLinesAgainstActiveContract(
     .limit(1);
 
   if (!contract) {
-    return { findings: [], contractedLineNumbers: new Set(), contractId: null };
+    return {
+      findings: [],
+      contractedLineNumbers: new Set(),
+      contractId: null,
+      rateCardHash: null,
+    };
   }
 
-  // Pull the relevant subset of contract lines — only those with a
-  // non-null itemKeyword (lines without one can't match) AND whose
-  // unitPrice is set (a line declaring "Quoted per project" carries
-  // no actionable rate).
+  // PR21 H7 — push the IS NOT NULL predicates into SQL so the hot path
+  // doesn't transfer (and discard) every header-only / "quoted per
+  // project" line. Combined with the (organization_id, item_keyword)
+  // index from sidecar 0023, the planner can return only the rows that
+  // can possibly match.
+  // PR21 H5 — also carry the org predicate on the lines read.
   const contractLineRows = await tx
     .select({
+      id: vendorContractLines.id,
       itemKeyword: vendorContractLines.itemKeyword,
       unitPrice: vendorContractLines.unitPrice,
       currency: vendorContractLines.currency,
       priceBasis: vendorContractLines.priceBasis,
     })
     .from(vendorContractLines)
-    .where(eq(vendorContractLines.contractId, contract.id));
+    .where(
+      and(
+        eq(vendorContractLines.organizationId, organizationId),
+        eq(vendorContractLines.contractId, contract.id),
+        isNotNull(vendorContractLines.itemKeyword),
+        isNotNull(vendorContractLines.unitPrice),
+      ),
+    );
 
-  const contractLines: ContractLineMatch[] = [];
-  for (const row of contractLineRows) {
-    if (row.itemKeyword === null || row.unitPrice === null) continue;
-    contractLines.push({
-      itemKeyword: row.itemKeyword,
-      unitPrice: Number(row.unitPrice),
-      currency: row.currency,
-      priceBasis: row.priceBasis,
-    });
-  }
+  const contractLines: ContractLineMatch[] = contractLineRows.map((row) => ({
+    // `!` is sound — the SQL predicates above prove non-null. Keeping
+    // the type narrowed at the boundary so downstream stays clean.
+    itemKeyword: row.itemKeyword!,
+    unitPrice: Number(row.unitPrice!),
+    currency: row.currency,
+    priceBasis: row.priceBasis,
+  }));
+
+  // PR21 H2 — hash the rate-card lines that participated in scoring.
+  // Sorting deterministically by id keeps the hash stable across query
+  // orderings; the (id, keyword, unitPrice, currency) tuple is the
+  // minimum that affects the scored outcome. Phase 11's evidence
+  // packet treats this as the binding from a contract.activated event
+  // to the validation.contract_scored event.
+  const sortedForHash = [...contractLineRows].sort((a, b) =>
+    a.id < b.id ? -1 : a.id > b.id ? 1 : 0,
+  );
+  const rateCardHash = createHash("sha256")
+    .update(
+      JSON.stringify(
+        sortedForHash.map((r) => ({
+          id: r.id,
+          k: r.itemKeyword,
+          p: r.unitPrice,
+          c: r.currency,
+        })),
+      ),
+    )
+    .digest("hex");
 
   if (contractLines.length === 0) {
     return {
       findings: [],
       contractedLineNumbers: new Set(),
       contractId: contract.id,
+      rateCardHash,
     };
   }
 
@@ -657,5 +714,10 @@ async function scoreLinesAgainstActiveContract(
     }
   }
 
-  return { findings, contractedLineNumbers, contractId: contract.id };
+  return {
+    findings,
+    contractedLineNumbers,
+    contractId: contract.id,
+    rateCardHash,
+  };
 }

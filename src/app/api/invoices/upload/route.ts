@@ -188,6 +188,10 @@ export async function POST(req: Request) {
           mimeType: inspected.mimeType,
           byteSize: inspected.byteSize,
           clientId,
+          // PR21 H6 — record the discriminator at upload time so an
+          // auditor can prove what classification the document carried
+          // before the extractor branch ran.
+          documentKind,
         },
       });
 

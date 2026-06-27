@@ -151,6 +151,15 @@ async function persistOutcome(
                   ? "provider circuit open"
                   : null;
 
+    // PR21 H4 — §2.4 carve-out for output_json was scoped for invoice
+    // extraction. Contracts carry a broader surface (rate-card unit
+    // prices, vendor-side remit_to + tax_id when the LLM picks them
+    // up). Run the persisted snapshot through scrub() so a future
+    // operator inspecting llm_runs.output_json for a contract gets
+    // the schema + line structure but not the negotiated rates or
+    // any leaked sensitive identifiers. The structured rate card is
+    // already preserved on vendor_contract_lines for the legitimate
+    // consumers.
     const [run] = await tx
       .insert(llmRuns)
       .values({
@@ -163,7 +172,8 @@ async function persistOutcome(
         inputHash: "inputHash" in meta ? meta.inputHash : null,
         inputTokensEstimate:
           "inputTokensEstimate" in meta ? meta.inputTokensEstimate : null,
-        outputJson: outcome.kind === "succeeded" ? outcome.result : null,
+        outputJson:
+          outcome.kind === "succeeded" ? scrub(outcome.result) : null,
         status: runStatus,
         errorMessage,
         durationMs: "durationMs" in meta ? meta.durationMs : null,

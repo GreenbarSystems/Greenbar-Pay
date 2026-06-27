@@ -51,13 +51,16 @@ export async function resolveContractVendor(
   // single source of truth that the Phase 7 vendor_pricing_history,
   // PR8's functional index, and the recompute job all rely on. Calling
   // it server-side keeps JS and SQL in lockstep.
+  //
+  // PR21 H8 — project `isNormalizedMatch` as a SQL boolean in the same
+  // round-trip. The prior shape re-issued one (single match) or two
+  // (two matches) extra round-trips just to label normalized vs alias —
+  // the information is already determinable from the WHERE clause's
+  // first OR-arm.
   const rows = await tx
     .select({
       id: vendors.id,
-      normalizedName: vendors.normalizedName,
-      // Drizzle returns Postgres text[] as string[]. We compare against
-      // the normalized form so a stored alias like 'acme supplies'
-      // matches an extracted 'ACME Supplies, LLC.'.
+      isNormalizedMatch: sql<boolean>`(${vendors.normalizedName} = normalize_vendor_text(${input.extractedVendorName}))`,
     })
     .from(vendors)
     .where(
@@ -82,18 +85,9 @@ export async function resolveContractVendor(
   // vendor by mistake (data-integrity edge case). Prefer the row
   // whose canonical name matches — that's strictly the safer call.
   if (rows.length > 1) {
-    const normalizedMatch = await tx
-      .select({ id: vendors.id })
-      .from(vendors)
-      .where(
-        and(
-          eq(vendors.organizationId, input.organizationId),
-          sql`${vendors.normalizedName} = normalize_vendor_text(${input.extractedVendorName})`,
-        ),
-      )
-      .limit(1);
-    if (normalizedMatch[0]) {
-      return { vendorId: normalizedMatch[0].id, method: "normalized" };
+    const normalized = rows.find((r) => r.isNormalizedMatch);
+    if (normalized) {
+      return { vendorId: normalized.id, method: "normalized" };
     }
     // Both are alias-only matches against different vendors. Decline to
     // auto-resolve — admin assignment at activation time is safer than
@@ -101,25 +95,11 @@ export async function resolveContractVendor(
     return null;
   }
 
-  // Single match. Differentiate normalized vs alias by re-checking the
-  // canonical name — alias matches set method to 'alias' so the audit
-  // event records *how* we resolved.
+  // Single match. The boolean projection tells us *how* we resolved —
+  // alias matches set method to 'alias' so the audit event records it.
   const onlyRow = rows[0];
-  if (
-    onlyRow.normalizedName !== null &&
-    (await tx
-      .select({ id: vendors.id })
-      .from(vendors)
-      .where(
-        and(
-          eq(vendors.id, onlyRow.id),
-          sql`${vendors.normalizedName} = normalize_vendor_text(${input.extractedVendorName})`,
-        ),
-      )
-      .limit(1)).length > 0
-  ) {
-    return { vendorId: onlyRow.id, method: "normalized" };
-  }
-
-  return { vendorId: onlyRow.id, method: "alias" };
+  return {
+    vendorId: onlyRow.id,
+    method: onlyRow.isNormalizedMatch ? "normalized" : "alias",
+  };
 }
