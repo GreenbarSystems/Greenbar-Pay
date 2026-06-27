@@ -16,6 +16,13 @@ export interface ObjectStorage {
   getSignedUrl(key: string, expiresInSeconds?: number): Promise<string>;
 
   deleteObject(key: string): Promise<void>;
+
+  /**
+   * Cheap reachability probe. HeadBucket on the documents bucket — no
+   * payload, no auth side effect beyond confirming the credential reaches
+   * the endpoint. Returns timing + an optional error string for /api/healthz.
+   */
+  healthCheck(): Promise<{ ok: boolean; latencyMs: number; error?: string }>;
 }
 
 export { s3Storage as storage } from "./s3";
