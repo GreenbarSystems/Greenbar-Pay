@@ -8,10 +8,15 @@
  */
 import "dotenv/config";
 import type PgBoss from "pg-boss";
-import { getQueue, stopQueue } from "@/lib/queue";
+import { getQueue, JOB, stopQueue } from "@/lib/queue";
 import { HANDLERS } from "@/jobs";
 import { isInboxEnabled, startInboxPoller, stopInboxPoller } from "@/lib/inbox/sqs";
 import { scrubError } from "@/lib/llm/scrub";
+
+// Run scheduled hygiene at minute 17 every hour (off the busy top-of-hour).
+// Override via env if a deployment wants different cadence.
+const IDEMPOTENCY_CLEANUP_CRON =
+  process.env.IDEMPOTENCY_CLEANUP_CRON ?? "17 * * * *";
 
 async function main() {
   const boss = await getQueue();
@@ -46,6 +51,17 @@ async function main() {
       );
     });
   }
+
+  // Scheduled hygiene jobs. boss.schedule is idempotent — calling it on
+  // every worker boot just refreshes the registered cron expression in
+  // pg-boss's own schedule table. pg-boss elects a single instance to
+  // fire each tick, so multiple workers don't double-enqueue.
+  await boss.schedule(JOB.cleanupIdempotencyKeys, IDEMPOTENCY_CLEANUP_CRON, {}, {
+    tz: "UTC",
+  });
+  console.log(
+    `[worker] scheduled ${JOB.cleanupIdempotencyKeys} at "${IDEMPOTENCY_CLEANUP_CRON}" UTC`,
+  );
 
   // AP inbox SQS poller runs alongside pg-boss handlers in the same
   // process — same image, same deploy, same lifecycle. Disabled when

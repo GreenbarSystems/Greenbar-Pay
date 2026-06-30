@@ -64,6 +64,9 @@ export const JOB = {
   extractContractData: "extract-contract-data",
   // Slice 2 — correction-aware RAG flywheel
   captureAndEmbedCorrection: "capture-and-embed-correction",
+  // Hygiene — runs on a cron schedule (boss.schedule in scripts/worker.ts).
+  // Deletes api_idempotency_keys rows past their 24h TTL.
+  cleanupIdempotencyKeys: "cleanup-idempotency-keys",
 } as const;
 
 export type JobPayloads = {
@@ -93,4 +96,6 @@ export type JobPayloads = {
     extractedInvoiceId: string;
     organizationId: string;
   };
+  // Hygiene job — no payload; cross-tenant cleanup.
+  [JOB.cleanupIdempotencyKeys]: Record<string, never>;
 };

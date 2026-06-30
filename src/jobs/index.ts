@@ -13,6 +13,7 @@ import { handleGenerateBriefingCard } from "./generateBriefingCard";
 import { handleAssembleEvidencePacket } from "./assembleEvidencePacket";
 import { handleExtractContractData } from "./extractContractData";
 import { handleCaptureAndEmbedCorrection } from "./captureAndEmbedCorrection";
+import { handleCleanupIdempotencyKeys } from "./cleanupIdempotencyKeys";
 
 type Handler<N extends keyof JobPayloads> = (
   job: PgBoss.Job<JobPayloads[N]>,
@@ -103,5 +104,15 @@ export const HANDLERS: Array<{
     name: JOB.captureAndEmbedCorrection,
     options: { batchSize: 4 },
     handler: handleCaptureAndEmbedCorrection as Handler<keyof JobPayloads>,
+  },
+  {
+    // Hygiene — deletes api_idempotency_keys past the 24h read-side TTL.
+    // Scheduled hourly via boss.schedule() in scripts/worker.ts; this
+    // entry exists so the handler is registered on every worker process.
+    // batchSize 1 — there's no concurrency benefit to running multiple
+    // cleanup passes at once.
+    name: JOB.cleanupIdempotencyKeys,
+    options: { batchSize: 1 },
+    handler: handleCleanupIdempotencyKeys as Handler<keyof JobPayloads>,
   },
 ];
