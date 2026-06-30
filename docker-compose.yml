@@ -47,12 +47,15 @@ services:
       exit 0;
       "
 
-  # Background worker. Same image as web; only the command differs.
+  # Background worker. Built from Dockerfile.worker — narrower than the
+  # web image: no `next build` step, no src/app or public in the image,
+  # boundary enforced at typecheck via tsconfig.worker.json.
   # Restart policy lets pg-boss redeliver any in-flight jobs after a crash.
   worker:
     profiles: ["app"]              # opt-in: `docker compose --profile app up`
-    build: .
-    command: ["npm", "run", "worker"]
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
     restart: unless-stopped
     depends_on:
       postgres:

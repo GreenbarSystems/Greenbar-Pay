@@ -158,9 +158,25 @@ the same `ingestEmlMessage()` the SQS worker would.
 ## Tests
 
 ```
-pnpm test:rls    # cross-tenant isolation test (addendum §1.6) — CI gate
-pnpm test        # full suite
+pnpm test:rls         # cross-tenant isolation test (addendum §1.6) — CI gate
+pnpm test             # full suite
+pnpm typecheck        # full TS check (web + worker)
+pnpm typecheck:worker # worker-only — verifies no src/app imports leaked in
 ```
+
+## Split builds
+
+The web app and the worker ship as separate images.
+
+- `Dockerfile` — Next.js (`npm run build`, `npm start`).
+- `Dockerfile.worker` — worker only. Skips `next build`. Copies only
+  `src/{db,jobs,lib}` and `scripts/`. Runs `npx tsx scripts/worker.ts`.
+  Boundary enforced at typecheck via `tsconfig.worker.json` and in CI
+  via `npm run typecheck:worker`.
+
+Both images still install the full root `package.json` dependency tree;
+splitting deps requires a monorepo split (apps/web + apps/worker) which
+is deferred. See [`CLAUDE.md`](./CLAUDE.md).
 
 ## Conventions
 

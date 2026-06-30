@@ -1,5 +1,6 @@
-# Single image for both web and worker — they share the same source tree and
-# only the entrypoint differs. Multi-stage to keep the runtime image small.
+# Web image (Next.js). The worker is built separately from Dockerfile.worker
+# which skips `next build` and copies only src/{db,jobs,lib} + scripts.
+# Multi-stage to keep the runtime image small.
 
 FROM node:20-alpine AS deps
 WORKDIR /app

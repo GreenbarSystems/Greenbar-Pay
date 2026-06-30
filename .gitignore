@@ -10,6 +10,6 @@ coverage/
 .vercel
 next-env.d.ts
 .commit-msg.tmp
-tsconfig.tsbuildinfo
+*.tsbuildinfo
 # Dev-mode magic-link transport writes the latest click-this URL here.
 .next-auth-dev-link.txt

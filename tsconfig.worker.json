@@ -1,0 +1,19 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "plugins": []
+  },
+  "include": [
+    "src/db/**/*.ts",
+    "src/jobs/**/*.ts",
+    "src/lib/**/*.ts",
+    "scripts/**/*.ts"
+  ],
+  "exclude": [
+    "node_modules",
+    ".next",
+    "src/app",
+    "**/__tests__/**",
+    "next-env.d.ts"
+  ]
+}

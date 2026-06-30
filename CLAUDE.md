@@ -58,6 +58,11 @@ Gating preserves optionality at near-zero ongoing cost.
 - **No direct ORM access outside `withOrg`** — enforced by ESLint.
 - **No direct `@anthropic-ai/sdk` imports outside `src/lib/llm/internal/`**
   — also enforced by ESLint.
+- **Worker code may not import from `src/app/`**. The worker is built
+  from `Dockerfile.worker` with `tsconfig.worker.json` excluding
+  `src/app/`. CI runs `npm run typecheck:worker` to enforce. If you add
+  a new worker dependency, make sure it lives under `src/{db,jobs,lib}`
+  or `scripts/`.
 - **Status columns are Postgres ENUMs**, not `TEXT + CHECK`.
 - **Mutating API endpoints take `Idempotency-Key`**; `PATCH` takes
   `If-Match` (addendum §4.6, §4.7).
