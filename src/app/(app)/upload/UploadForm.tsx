@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 
 type UploadState =
   | { kind: "idle" }
@@ -8,18 +8,41 @@ type UploadState =
   | { kind: "done"; filename: string; documentId: string; dedup: boolean }
   | { kind: "error"; filename: string; message: string };
 
+/**
+ * (name | size | lastModified) is the user-perspective identity of a
+ * file from disk: same identity = same upload attempt. Different
+ * identity (renamed, edited, replaced) = a new attempt and a fresh
+ * idempotency key.
+ */
+function fileIdentity(f: File): string {
+  return `${f.name}|${f.size}|${f.lastModified}`;
+}
+
 export default function UploadForm() {
   const [state, setState] = useState<UploadState>({ kind: "idle" });
 
+  // Cache the Idempotency-Key by file identity so a manual retry of the
+  // SAME file replays the same key — the server returns the cached
+  // response per addendum §4.6 instead of creating a duplicate document
+  // record. A genuinely new file selection (different name/size/mtime)
+  // triggers a fresh key.
+  const idemRef = useRef<{ identity: string; key: string } | null>(null);
+
   async function handleFile(file: File) {
     setState({ kind: "uploading", filename: file.name });
+
+    const identity = fileIdentity(file);
+    if (!idemRef.current || idemRef.current.identity !== identity) {
+      idemRef.current = { identity, key: crypto.randomUUID() };
+    }
+    const idempotencyKey = idemRef.current.key;
+
     const fd = new FormData();
     fd.append("file", file);
     const res = await fetch("/api/invoices/upload", {
       method: "POST",
       body: fd,
-      // Client-generated UUID enables safe retry (§4.6).
-      headers: { "Idempotency-Key": crypto.randomUUID() },
+      headers: { "Idempotency-Key": idempotencyKey },
     });
     const body = await res.json().catch(() => ({}));
     if (!res.ok) {
