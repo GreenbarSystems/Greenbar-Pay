@@ -360,7 +360,27 @@ export default function ReviewDetailClient(props: Props) {
           // falls back to a plain <iframe> internally if PDF.js can't
           // load the file (corrupt PDF, CSP block, network error) so
           // reviewers are never stuck with a blank panel.
-          <PdfViewer fileUrl={props.fileUrl} fallbackUrl={props.fileUrl} />
+          <PdfViewer
+            fileUrl={props.fileUrl}
+            fallbackUrl={props.fileUrl}
+            onRefreshUrl={async () => {
+              // Re-issue a 120s signed URL without a full page reload —
+              // a navigation would discard unsaved form edits. Returns
+              // null on auth/RBAC/404/network failure so PdfViewer
+              // falls back to the iframe path.
+              try {
+                const res = await fetch(
+                  `/api/ap/review/${props.invoice.id}/file-url`,
+                  { cache: "no-store" },
+                );
+                if (!res.ok) return null;
+                const data = (await res.json()) as { url?: string };
+                return data.url ?? null;
+              } catch {
+                return null;
+              }
+            }}
+          />
         )}
       </div>
 

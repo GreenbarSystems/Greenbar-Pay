@@ -23,7 +23,7 @@
  *     (copied from node_modules during install, see scripts/copy-pdf-
  *     worker.mjs for the post-install hook).
  */
-import { useState, useCallback, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Document, Page, pdfjs } from "react-pdf";
 import "react-pdf/dist/Page/TextLayer.css";
 import "react-pdf/dist/Page/AnnotationLayer.css";
@@ -38,22 +38,49 @@ const DEFAULT_ZOOM_INDEX = 2; // 1.0×
 
 interface Props {
   fileUrl: string;
-  /** Fallback target if PDF.js fails to load. Same signed URL the
-   *  parent already has. */
+  /** Fallback target if PDF.js fails to load AND no refresh handler
+   *  recovers. Same signed URL the parent already has. */
   fallbackUrl?: string;
+  /**
+   * Optional async callback that returns a fresh signed URL. Called
+   * exactly once per viewer mount when PDF.js reports a load error
+   * (typical cause: the parent's 120-second signed URL expired while
+   * the reviewer was reading). If the callback succeeds we re-render
+   * with the fresh URL; if it fails (or isn't provided), we fall back
+   * to the iframe path.
+   */
+  onRefreshUrl?: () => Promise<string | null>;
 }
 
-export default function PdfViewer({ fileUrl, fallbackUrl }: Props) {
+export default function PdfViewer({
+  fileUrl,
+  fallbackUrl,
+  onRefreshUrl,
+}: Props) {
   const [pageCount, setPageCount] = useState<number | null>(null);
   const [page, setPage] = useState(1);
   const [zoomIndex, setZoomIndex] = useState(DEFAULT_ZOOM_INDEX);
   const [loadError, setLoadError] = useState<Error | null>(null);
+  // Held in state so an in-place refresh can swap the URL without
+  // forcing the parent to re-render.
+  const [currentUrl, setCurrentUrl] = useState(fileUrl);
+  // Single-shot guard: refresh once per viewer mount. Without this a
+  // permanently-bad URL would loop forever on Document → error → refresh.
+  const refreshAttemptedRef = useRef(false);
+
+  // If the parent ever swaps fileUrl (navigation between invoices,
+  // post-PATCH refresh), reset the in-place state.
+  useEffect(() => {
+    setCurrentUrl(fileUrl);
+    setLoadError(null);
+    refreshAttemptedRef.current = false;
+  }, [fileUrl]);
 
   const scale = ZOOM_LEVELS[zoomIndex];
 
   // Memoize the file URL options so react-pdf's Document doesn't
   // remount on every parent re-render (which would re-fetch the PDF).
-  const file = useMemo(() => ({ url: fileUrl }), [fileUrl]);
+  const file = useMemo(() => ({ url: currentUrl }), [currentUrl]);
 
   const onLoadSuccess = useCallback(({ numPages }: { numPages: number }) => {
     setPageCount(numPages);
@@ -62,9 +89,27 @@ export default function PdfViewer({ fileUrl, fallbackUrl }: Props) {
     setPage((p) => Math.min(p, numPages));
   }, []);
 
-  const onLoadError = useCallback((err: Error) => {
-    setLoadError(err);
-  }, []);
+  const onLoadError = useCallback(
+    async (err: Error) => {
+      if (onRefreshUrl && !refreshAttemptedRef.current) {
+        refreshAttemptedRef.current = true;
+        try {
+          const fresh = await onRefreshUrl();
+          if (fresh) {
+            setCurrentUrl(fresh);
+            // Don't set loadError — the new URL will retry the Document
+            // load and either succeed or hit onLoadError again (which
+            // now falls through to the iframe fallback below).
+            return;
+          }
+        } catch {
+          // Fall through to the fallback path.
+        }
+      }
+      setLoadError(err);
+    },
+    [onRefreshUrl],
+  );
 
   if (loadError && fallbackUrl) {
     // PDF.js failed (network, CSP, or the file isn't a valid PDF).
