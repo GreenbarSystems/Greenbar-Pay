@@ -661,7 +661,14 @@ function numericOrNull(v: unknown): number | null {
 
 function mapOutcomeToRunStatus(
   outcome: { kind: string },
-): "succeeded" | "schema_failed" | "provider_error" | "text_too_large" | "quota_exceeded" | "circuit_open" {
+):
+  | "succeeded"
+  | "schema_failed"
+  | "provider_error"
+  | "text_too_large"
+  | "quota_exceeded"
+  | "circuit_open"
+  | "non_compliant_model" {
   switch (outcome.kind) {
     case "succeeded":
       return "succeeded";
@@ -676,6 +683,10 @@ function mapOutcomeToRunStatus(
     case "circuit_open":
       return "circuit_open";
     case "non_compliant_model":
+      // Previously fell through to "provider_error" via the shared
+      // default branch. Now first-class so audit can distinguish a
+      // policy violation from a transient provider failure.
+      return "non_compliant_model";
     default:
       return "provider_error";
   }

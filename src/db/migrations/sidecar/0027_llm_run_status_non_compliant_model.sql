@@ -1,0 +1,17 @@
+-- Adds `non_compliant_model` to the llm_run_status enum (addendum §4.1).
+--
+-- Previously the LLM gateway's `non_compliant_model` dispatch outcome
+-- (returned when the registry refuses a model lacking ZDR / wrong
+-- region / wrong retention policy) was coerced to `provider_error`
+-- before persisting to llm_runs.status. That collapsed two
+-- audit-distinguishable failure modes:
+--
+--   - provider_error      : transient Anthropic 5xx; retry is appropriate.
+--   - non_compliant_model : policy violation (a model that should never
+--                           have been dispatched got dispatched);
+--                           requires investigation, not retry.
+--
+-- This sidecar adds the value so the job mappers can persist it
+-- without coercion. IF NOT EXISTS keeps the migration idempotent on
+-- environments that re-apply.
+ALTER TYPE llm_run_status ADD VALUE IF NOT EXISTS 'non_compliant_model';

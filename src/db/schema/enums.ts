@@ -46,7 +46,15 @@ export const invoiceReviewStatus = pgEnum("invoice_review_status", [
   "superseded",
 ]);
 
-/** llm_runs.status — addendum §4.1 append-only model. */
+/**
+ * llm_runs.status — addendum §4.1 append-only model.
+ *
+ * `non_compliant_model` is distinct from `provider_error`: the latter
+ * is a transient Anthropic 5xx (retry-appropriate); the former is a
+ * policy violation (the registry refused to dispatch a model lacking
+ * ZDR / wrong region / wrong retention). Keeping them separate
+ * preserves audit fidelity. Added via sidecar 0027.
+ */
 export const llmRunStatus = pgEnum("llm_run_status", [
   "started",
   "succeeded",
@@ -55,6 +63,7 @@ export const llmRunStatus = pgEnum("llm_run_status", [
   "text_too_large",
   "quota_exceeded",
   "circuit_open",
+  "non_compliant_model",
 ]);
 
 /** export.format — generic CSV/JSON ship first; ERP CSVs later. */

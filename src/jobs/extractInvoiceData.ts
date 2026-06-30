@@ -341,7 +341,14 @@ async function persistOutcome(
 
 function mapOutcomeToRunStatus(
   outcome: DispatchOutcome<InvoiceExtractionResult>,
-): "succeeded" | "schema_failed" | "provider_error" | "text_too_large" | "quota_exceeded" | "circuit_open" {
+):
+  | "succeeded"
+  | "schema_failed"
+  | "provider_error"
+  | "text_too_large"
+  | "quota_exceeded"
+  | "circuit_open"
+  | "non_compliant_model" {
   switch (outcome.kind) {
     case "succeeded":
       return "succeeded";
@@ -356,7 +363,10 @@ function mapOutcomeToRunStatus(
     case "circuit_open":
       return "circuit_open";
     case "non_compliant_model":
-      return "provider_error";
+      // Previously coerced to "provider_error", collapsing a policy
+      // violation into a transient-failure bucket. Now first-class so
+      // audit can distinguish "retry me" from "investigate me".
+      return "non_compliant_model";
     default:
       // TS doesn't always narrow the discriminated union to never when
       // the union has many variants — add an exhaustive default to
