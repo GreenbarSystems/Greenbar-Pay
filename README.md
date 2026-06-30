@@ -4,6 +4,24 @@ AP invoice intake, OCR, and LLM extraction with a human review queue. See
 `docs/ap-invoice-ai-mvp-technical-prd-merged.md` for the PRD; the addendum
 overrides the base PRD where they conflict.
 
+## Multi-client freeze (solo-first)
+
+The product is shifting to a **solo-first** shape: one customer
+organization per account, no client picker, no CPA-firm features. The
+existing multi-client code stays in the repo but is gated at runtime
+behind `ENABLE_MULTI_CLIENT` (default off). See
+[`CLAUDE.md`](./CLAUDE.md) for the rule of the road and
+[`src/lib/featureFlags.ts`](./src/lib/featureFlags.ts) for the flag.
+
+Frozen surfaces: `clients` table, `user_client_access`, per-client AP
+inbox routing (`ap+<org>--<client>@in.<domain>`), per-client RBAC
+scoping (`src/lib/rbac/client-scope.ts`), and the client filters in the
+inbox / review / exports / upload / vendors UI. RLS isolation between
+orgs is **not** frozen — it stays mandatory.
+
+To develop against the frozen surfaces (tests, fixes, parity checks),
+set `ENABLE_MULTI_CLIENT=true` in your `.env`.
+
 ## Status
 
 **Phase 1 — Foundation** ✓ shipped
