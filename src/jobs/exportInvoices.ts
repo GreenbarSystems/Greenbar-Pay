@@ -48,6 +48,20 @@ export async function handleExportInvoices(
   // baked into the audit + idempotency cache. Now: pg-boss retries can
   // re-claim a failed run; the error_message is cleared on re-claim so
   // a later inspector sees only the current failure (if any).
+  //
+  // Audit follow-up: claim ALSO accepts `running`. The S3 PUT below
+  // runs between the claim and the completion UPDATE; if the worker
+  // process dies after the PUT but before (or during) the completion
+  // tx, AND the outer catch-block fail-marking also fails (e.g. DB
+  // unreachable), the row stuck at `running` would otherwise block
+  // every future retry forever. Accepting `running` here closes that
+  // hole. The S3 PUT is idempotent on the deterministic key
+  // (`exports/<org>/<exportId>.<fmt>`), so a re-PUT just overwrites
+  // with the same content. The lost-race check after the completion
+  // UPDATE guards against the (vanishingly unlikely) case of two
+  // workers genuinely processing the same job concurrently — pg-boss
+  // singleton + visibility timeout should prevent it, but cheap to
+  // verify.
   const claimed = await withOrgAsWorker(organizationId, async (tx) => {
     const rows = await tx
       .update(exportsTable)
@@ -56,7 +70,7 @@ export async function handleExportInvoices(
         and(
           eq(exportsTable.id, exportId),
           eq(exportsTable.organizationId, organizationId),
-          inArray(exportsTable.status, ["created", "failed"]),
+          inArray(exportsTable.status, ["created", "failed", "running"]),
         ),
       )
       .returning({
@@ -68,7 +82,7 @@ export async function handleExportInvoices(
 
   if (!claimed) {
     console.log(
-      `[export-invoices] export=${exportId} not claimable (not in created|failed); skipping`,
+      `[export-invoices] export=${exportId} not claimable (status terminal or row missing); skipping`,
     );
     return;
   }
@@ -208,8 +222,19 @@ async function runExport(
   });
 
   // ── 6–8. Persist completion + advance statuses + audit ──────────────
+  // Compute the content hash outside the tx (deterministic, no DB IO).
+  // PR20 — captures what was written so a later download event can
+  // verify no storage-layer substitution occurred.
+  const fileContentHash = createHash("sha256").update(body).digest("hex");
+
   await withOrgAsWorker(organizationId, async (tx) => {
-    await tx
+    // Compare-and-set completion. RETURNING tells us whether this run
+    // actually advanced the row. If a concurrent worker beat us — only
+    // possible if pg-boss singleton + visibility timeout failed, but
+    // cheap to guard — `completed` is already set and the rest of this
+    // block would double-advance invoices / double-audit. Silent exit
+    // is correct: the work is already done.
+    const advanced = await tx
       .update(exportsTable)
       .set({
         status: "completed",
@@ -222,7 +247,15 @@ async function runExport(
           eq(exportsTable.id, exportId),
           eq(exportsTable.status, "running"),
         ),
+      )
+      .returning({ id: exportsTable.id });
+
+    if (advanced.length === 0) {
+      console.log(
+        `[export-invoices] export=${exportId} completion lost race (already completed by concurrent worker); skipping downstream advances`,
       );
+      return;
+    }
 
     // Advance invoices: only from 'approved' → 'exported'. If any have
     // since been re-edited (back to needs_review), they stay there.
@@ -250,15 +283,6 @@ async function runExport(
           eq(documents.status, "approved"),
         ),
       );
-
-    // PR20 — capture the file's content hash at the moment of write
-    // so the audit chain links what was produced to what's later
-    // delivered. The export.downloaded event (PR19 H5) records the
-    // download; comparing manifest_hash equivalents between produce
-    // and deliver detects storage-layer substitution or corruption.
-    const fileContentHash = createHash("sha256")
-      .update(body)
-      .digest("hex");
 
     await tx.insert(auditEvents).values({
       organizationId,
