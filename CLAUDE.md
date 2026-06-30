@@ -68,4 +68,53 @@ Gating preserves optionality at near-zero ongoing cost.
   `If-Match` (addendum §4.6, §4.7).
 - **CI gate**: `npm run test:rls` must pass on every PR.
 
+## Operational notes
+
+These aren't rules for new code — they're things that have surprised
+people in deploy / pre-pilot review. Keep them in mind when touching
+adjacent code.
+
+### PgBouncer must be transaction-mode (not session-mode)
+
+`withOrg` sets the tenant GUC via `SET LOCAL app.current_org_id = $1`
+inside a transaction (`src/db/client.ts`). `SET LOCAL` ties the value
+to the transaction, which is what makes pooling safe — the next
+checkout from the same backend connection starts with the GUC reset.
+
+PgBouncer in **transaction-mode** is the only pooling mode that
+preserves this property under load. In session-mode, multiple
+transactions in the same session share GUCs across checkouts, and the
+tenant GUC from an earlier request can leak into a later one. In
+statement-mode, prepared statements break.
+
+Pool sizing today (see `src/db/internal/rawClient.ts`):
+
+  - `app_user`   max 15 (overridable via `DATABASE_POOL_MAX_USER`)
+  - `app_worker` max 25 (overridable via `DATABASE_POOL_MAX_WORKER`)
+  - `app_admin`  max 4  (overridable via `DATABASE_POOL_MAX_ADMIN`)
+
+The pre-pilot review math: a 15-invoice approval burst can produce
+24+ concurrent connection requests against the worker pool through
+`validateExtractedInvoice` (batchSize=16) + `recomputeVendorProfile`
+(8) + `assembleEvidencePacket` (8). If you see "connection pool
+exhausted" warnings in worker logs under load, either raise the
+worker pool max or drop one of those batch sizes in `src/jobs/index.ts`.
+
+### RLS migration load order
+
+Sidecar migrations `0001_rls.sql` through `0005_rls_phase5.sql` were
+written before `0021_issue3_rls_null_safe.sql` introduced the
+`app_current_org_id()` helper that NULL-safely casts the GUC.
+
+If you ever apply migrations in isolation (e.g. spinning up a fresh
+DB at an earlier revision for repro purposes), 0001–0005's
+`current_setting('app.current_org_id', true)::uuid` will throw on
+queries made before the GUC is set (empty string → `''::uuid` fails).
+The full migration set including 0021 is what production runs; the
+order shipped in this repo is correct end-to-end. The risk is only
+for ad-hoc partial replays.
+
+If you find yourself wanting to backfill 0001–0005 to use the helper,
+that's a fine cleanup — make sure 0021 still runs idempotently after.
+
 See `README.md` for full stack, conventions, and local-dev instructions.
