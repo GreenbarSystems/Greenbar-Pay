@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { auth } from "@/lib/auth";
 import { withOrg } from "@/db/client";
 import { exports as exportsTable, users } from "@/db/schema";
@@ -34,9 +35,9 @@ export default async function ExportsPage() {
       {rows.length === 0 ? (
         <div className="rounded-md border border-dashed border-gray-300 bg-white p-12 text-center text-gray-500">
           No exports yet. Approve some invoices and export them from the{" "}
-          <a className="underline" href="/review?status=approved">
+          <Link className="underline" href="/review?status=approved">
             review queue
-          </a>
+          </Link>
           .
         </div>
       ) : (
