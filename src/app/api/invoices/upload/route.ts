@@ -31,6 +31,7 @@ import {
   writeIdempotencyKey,
 } from "@/lib/idempotency";
 import { getQueue, JOB } from "@/lib/queue";
+import { isMultiClientEnabled } from "@/lib/featureFlags";
 
 const EXT_BY_MIME: Record<string, string> = {
   "application/pdf": "pdf",
@@ -65,8 +66,15 @@ export async function POST(req: Request) {
 
   const file = formData.get("file");
   const clientIdRaw = formData.get("clientId");
+  // Multi-client freeze (CLAUDE.md — see src/lib/featureFlags.ts). When
+  // the flag is off, clientId from the form is silently coerced to
+  // null so an upload cannot be tagged with a client that solo mode
+  // does not surface. When the freeze is later lifted, this guard
+  // becomes a no-op.
   const clientId =
-    typeof clientIdRaw === "string" && clientIdRaw.length > 0 ? clientIdRaw : null;
+    isMultiClientEnabled() && typeof clientIdRaw === "string" && clientIdRaw.length > 0
+      ? clientIdRaw
+      : null;
 
   // Phase 9.5 — documentKind discriminator routes the upload to either
   // the invoice extraction pipeline (default) or the contract

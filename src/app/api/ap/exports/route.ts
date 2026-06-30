@@ -28,6 +28,7 @@ import {
 import { requirePermission } from "@/lib/rbac";
 import { withIdempotency } from "@/lib/review/idempotencyWrap";
 import { getQueue, JOB } from "@/lib/queue";
+import { isMultiClientEnabled } from "@/lib/featureFlags";
 
 const BodySchema = z.object({
   format: z.enum(["csv", "json"]),
@@ -54,6 +55,15 @@ export async function POST(req: Request) {
       { error: "invalid_body", issues: (err as z.ZodError).issues },
       { status: 400 },
     );
+  }
+
+  // Multi-client freeze (CLAUDE.md — see src/lib/featureFlags.ts). When
+  // the flag is off, the product is solo-first: clientId from the
+  // request body is silently coerced to null so an export cannot be
+  // scoped to a client that solo mode does not surface.
+  // When the freeze is later lifted, this guard becomes a no-op.
+  if (!isMultiClientEnabled() && body.clientId != null) {
+    body = { ...body, clientId: null };
   }
 
   return withIdempotency(
