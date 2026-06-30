@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+# Pre-commit gate.
+#
+# When the staged diff touches anything under src/db/migrations/, run
+# `npm run db:migrate:check` to apply the full migration suite to a
+# throwaway database. This catches SQL-apply-time bugs (IMMUTABLE
+# predicate violations, missing extensions, syntax errors) that tsc
+# and ESLint will never see.
+#
+# Skipped if Docker / Postgres isn't reachable so devs can still
+# commit non-migration changes without standing infra. To force a
+# skip even for migration changes (e.g. doc-only edits in migration
+# files), set SKIP_MIGRATE_CHECK=1.
+set -euo pipefail
+
+if [[ "${SKIP_MIGRATE_CHECK:-}" == "1" ]]; then
+  echo "[pre-commit] SKIP_MIGRATE_CHECK=1; skipping db:migrate:check"
+  exit 0
+fi
+
+# Files staged for commit (added/copied/modified/renamed).
+changed=$(git diff --cached --name-only --diff-filter=ACMR -- 'src/db/migrations/' 'src/db/schema/' || true)
+
+if [[ -z "$changed" ]]; then
+  exit 0
+fi
+
+echo "[pre-commit] migration-relevant files changed; running db:migrate:check"
+echo "$changed" | sed 's/^/[pre-commit]   /'
+
+# Probe Postgres reachability before invoking the check (the check
+# itself would fail with a less obvious "ECONNREFUSED" message).
+host="${PGHOST:-localhost}"
+port="${PGPORT:-5432}"
+if ! (echo > "/dev/tcp/${host}/${port}") 2>/dev/null; then
+  cat <<EOF
+[pre-commit] cannot reach Postgres at ${host}:${port}.
+[pre-commit] start it with: docker compose up -d postgres
+[pre-commit] or skip this check: SKIP_MIGRATE_CHECK=1 git commit ...
+EOF
+  exit 1
+fi
+
+if ! npm run --silent db:migrate:check; then
+  cat <<EOF
+
+[pre-commit] db:migrate:check failed. Fix the migration locally, then
+[pre-commit] re-stage and re-commit. To bypass intentionally:
+[pre-commit]   SKIP_MIGRATE_CHECK=1 git commit ...
+EOF
+  exit 1
+fi

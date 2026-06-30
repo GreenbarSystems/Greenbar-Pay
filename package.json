@@ -7,18 +7,20 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint",
+    "lint": "next lint --no-cache",
     "typecheck": "tsc --noEmit",
     "typecheck:worker": "tsc --noEmit -p tsconfig.worker.json",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "tsx src/db/migrate.ts",
+    "db:migrate:check": "tsx scripts/migrate-check.ts",
     "db:studio": "drizzle-kit studio",
     "test": "vitest run",
     "test:rls": "vitest run src/db/__tests__/rls.test.ts",
     "worker": "tsx scripts/worker.ts",
     "worker:dev": "tsx watch scripts/worker.ts",
     "ingest:eml": "tsx scripts/ingest-eml.ts",
-    "postinstall": "node scripts/copy-pdf-worker.mjs"
+    "setup-hooks": "node scripts/setup-hooks.mjs",
+    "postinstall": "node scripts/copy-pdf-worker.mjs && node scripts/setup-hooks.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.32.1",

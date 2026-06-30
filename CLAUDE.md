@@ -68,6 +68,36 @@ Gating preserves optionality at near-zero ongoing cost.
   `If-Match` (addendum §4.6, §4.7).
 - **CI gate**: `npm run test:rls` must pass on every PR.
 
+## Local gates that match CI
+
+These are designed so a passing local check means CI will also pass.
+Earlier in the repo, lint and migration bugs reached `main` because
+local commands quietly diverged from CI behaviour.
+
+- **`npm run lint`** runs `next lint --no-cache`. The cache version
+  served stale rule severities after the `eslint-config-next` bump
+  and let an `<a>`-for-internal-nav error slip through unnoticed.
+  Slower per run but always honest.
+
+- **`npm run db:migrate:check`** spins up a throwaway database
+  (`greenbar_migrate_check`) on the local docker-compose Postgres,
+  runs the full Drizzle + sidecar migration suite, then drops it.
+  Catches SQL-apply-time bugs (IMMUTABLE-predicate violations,
+  missing extensions, role/grant ordering, syntax errors) that
+  TypeScript and ESLint never see. Prereq: `docker compose up -d
+  postgres` so a server is reachable.
+
+- **`.githooks/pre-commit`** automatically runs `db:migrate:check`
+  when the staged diff touches `src/db/migrations/` or
+  `src/db/schema/`. Installed by `scripts/setup-hooks.mjs` from the
+  `postinstall` hook (`git config core.hooksPath .githooks`). On a
+  fresh clone, `npm install` activates it; on existing clones, run
+  `npm run setup-hooks` once.
+
+  If Postgres isn't running, the hook tells you how to start it. If
+  you genuinely need to bypass (doc-only edits to a migration file):
+  `SKIP_MIGRATE_CHECK=1 git commit ...`.
+
 ## Operational notes
 
 These aren't rules for new code — they're things that have surprised
