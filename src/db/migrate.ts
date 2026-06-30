@@ -17,6 +17,18 @@ async function main() {
   const pool = new Pool({ connectionString: ADMIN_URL });
   const db = drizzle(pool);
 
+  // Bootstrap extensions BEFORE Drizzle migrations. The init.sql
+  // Drizzle migration creates `extraction_corrections.embedding` as
+  // `vector(1024)` (see src/db/schema/extractionCorrections.ts) —
+  // that DDL fails with "type vector does not exist" unless the
+  // extension is already enabled. The sidecar 0025 also runs
+  // `CREATE EXTENSION IF NOT EXISTS vector` but executes AFTER the
+  // Drizzle phase, which is too late for the first run on a fresh DB.
+  // CI uses the `pgvector/pgvector:pg16` image so the binary is
+  // present; this just activates it for our database.
+  console.log("• bootstrapping required extensions…");
+  await pool.query("CREATE EXTENSION IF NOT EXISTS vector");
+
   console.log("• applying Drizzle migrations…");
   await migrate(db, { migrationsFolder: "./src/db/migrations" });
 
