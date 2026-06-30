@@ -144,7 +144,7 @@ async function runDispatch<T>(args: {
   }
 
   // ── Pre-flight: circuit (§2.7) ────────────────────────────────────────
-  const breaker = checkCircuit(model.provider, now);
+  const breaker = await checkCircuit(model.provider, now);
   if (breaker.open) {
     return { kind: "circuit_open", meta: baseMeta };
   }
@@ -164,7 +164,7 @@ async function runDispatch<T>(args: {
       prompt: args.prompt,
       outputSchema: args.outputSchema,
     });
-    recordOutcome(model.provider, "ok", Date.now());
+    await recordOutcome(model.provider, "ok", Date.now());
     return {
       kind: "succeeded",
       result: out.result,
@@ -188,7 +188,7 @@ async function runDispatch<T>(args: {
             JSON.stringify(err.issues).slice(0, 500) +
             ". Emit the tool again with the corrections.",
         });
-        recordOutcome(model.provider, "ok", Date.now());
+        await recordOutcome(model.provider, "ok", Date.now());
         return {
           kind: "succeeded",
           result: out.result,
@@ -199,7 +199,7 @@ async function runDispatch<T>(args: {
           },
         };
       } catch (retryErr) {
-        recordOutcome(model.provider, "error", Date.now());
+        await recordOutcome(model.provider, "error", Date.now());
         if (retryErr instanceof LlmSchemaError) {
           return {
             kind: "schema_failed",

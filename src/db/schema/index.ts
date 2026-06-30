@@ -23,3 +23,6 @@ export * from "./vendorContracts";
 export * from "./verificationTokens";
 // Slice 2 — correction-aware RAG flywheel.
 export * from "./extractionCorrections";
+// LLM circuit-breaker shared state (addendum §2.7) — DB trigger sets
+// opened_at; src/lib/llm/circuit.ts reads it.
+export * from "./llmCircuitState";

@@ -5,81 +5,81 @@
  *    the gateway opens the circuit for that provider and falls back to
  *    the secondary model."
  *
- * Phase 3 only ships Anthropic, so a tripped circuit means: refuse to
- * dispatch, return a structured `circuit_open` error, and let the
- * caller record an llm_runs row with status='circuit_open'. The job
- * marks the document `review_required` with a warning — no LLM call.
+ * State lives in the shared `llm_circuit_state` table, populated by
+ * a DB trigger on `llm_runs` INSERT (see migration
+ * 0028_llm_circuit_breaker.sql). This replaces the previous
+ * per-worker in-memory implementation, which had two known
+ * deficiencies:
  *
- * State is in-memory and per-worker process. A multi-worker fleet
- * effectively gets per-worker breakers; that's acceptable because
- * each worker independently observes the provider's health.
+ *   - Per-worker state lost the 8 MIN_SAMPLES headroom on every
+ *     restart, so a deploy during a provider outage produced a
+ *     thundering-herd of fresh dispatches before the circuit re-armed.
+ *   - No cross-replica coordination: a 5-worker fleet had to
+ *     independently observe MIN_SAMPLES failures each (40 total) before
+ *     the breaker tripped fleet-wide.
+ *
+ * Both go away with shared state. The DB trigger runs SECURITY DEFINER
+ * so it can read llm_runs across all orgs for the rate calculation
+ * (RLS would otherwise scope to the current GUC).
+ *
+ * recordOutcome() is kept as an async no-op for call-site clarity —
+ * the trigger is the actual writer. checkCircuit() is the read +
+ * half-open probe path.
  */
+import { eq } from "drizzle-orm";
+import { rawWorkerDb } from "@/db/internal/rawClient";
+import { llmCircuitState } from "@/db/schema";
 
-const WINDOW_MS = 5 * 60 * 1000;
-const THRESHOLD = 0.25;
-const MIN_SAMPLES = 8; // don't open on the very first failure
 const RESET_AFTER_MS = 30 * 1000; // probe again every 30s when open
 
 type Outcome = "ok" | "error";
-interface Event {
-  at: number;
-  outcome: Outcome;
-}
 
-interface State {
-  events: Event[];
-  openedAt: number | null;
-}
-
-const state = new Map<string, State>();
-
-function getState(provider: string): State {
-  let s = state.get(provider);
-  if (!s) {
-    s = { events: [], openedAt: null };
-    state.set(provider, s);
-  }
-  return s;
-}
-
-function prune(s: State, now: number) {
-  const cutoff = now - WINDOW_MS;
-  while (s.events.length > 0 && s.events[0].at < cutoff) s.events.shift();
-}
-
-/** Call BEFORE dispatching. Throws nothing — returns the decision. */
-export function checkCircuit(
+/** Call BEFORE dispatching. Resolves to the decision. */
+export async function checkCircuit(
   provider: string,
   now: number,
-): { open: boolean; reason?: string } {
-  const s = getState(provider);
-  if (!s.openedAt) return { open: false };
-  if (now - s.openedAt >= RESET_AFTER_MS) {
-    // Half-open: let one request through; the next record() decides whether
-    // to close fully or re-open.
-    s.openedAt = null;
+): Promise<{ open: boolean; reason?: string }> {
+  const rows = await rawWorkerDb
+    .select({ openedAt: llmCircuitState.openedAt })
+    .from(llmCircuitState)
+    .where(eq(llmCircuitState.provider, provider));
+
+  const openedAt = rows[0]?.openedAt;
+  if (!openedAt) return { open: false };
+
+  const sinceOpen = now - openedAt.getTime();
+  if (sinceOpen >= RESET_AFTER_MS) {
+    // Half-open: clear the row, let the next dispatch through. If it
+    // errors, the next llm_runs INSERT trigger fires and re-opens.
+    // DELETE rather than UPDATE-to-null so an INSERT ON CONFLICT in
+    // the trigger always succeeds without a race.
+    await rawWorkerDb
+      .delete(llmCircuitState)
+      .where(eq(llmCircuitState.provider, provider));
     return { open: false };
   }
+
   return { open: true, reason: "circuit_open_for_provider" };
 }
 
-/** Call AFTER dispatching. `error` covers 5xx + schema failure. */
-export function recordOutcome(
-  provider: string,
-  outcome: Outcome,
-  now: number,
-): void {
-  const s = getState(provider);
-  prune(s, now);
-  s.events.push({ at: now, outcome });
-  if (s.events.length < MIN_SAMPLES) return;
-  const errs = s.events.reduce((n, e) => n + (e.outcome === "error" ? 1 : 0), 0);
-  if (errs / s.events.length >= THRESHOLD) {
-    s.openedAt = now;
-  }
+/**
+ * Call AFTER dispatching. Intentionally a no-op — the DB trigger on
+ * `llm_runs` INSERT (trg_llm_circuit_evaluate) handles state.
+ *
+ * Kept in the API so call sites continue to read as if there's a
+ * post-flight observation step; removing it would obscure the
+ * dispatch → record symmetry. The parameters are unused but accepted
+ * for backward compat.
+ */
+export async function recordOutcome(
+  _provider: string,
+  _outcome: Outcome,
+  _now: number,
+): Promise<void> {
+  // Trigger is the writer. See migration 0028.
 }
 
-/** For tests. */
-export function __resetCircuit() {
-  state.clear();
+/** For tests. Clears all provider state. */
+export async function __resetCircuit(): Promise<void> {
+  await rawWorkerDb.delete(llmCircuitState);
 }
