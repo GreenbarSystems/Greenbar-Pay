@@ -12,17 +12,25 @@ import Link from "next/link";
 import { auth } from "@/lib/auth";
 import { withOrg } from "@/db/client";
 import { vendors } from "@/db/schema";
-import { and, desc, eq, inArray, isNull, or, sql } from "drizzle-orm";
+import { inArray, isNull, or } from "drizzle-orm";
 import { loadPermittedClientIds } from "@/lib/rbac/client-scope";
+import { decodeCursor, encodeCursor } from "@/lib/pagination";
+import { fetchVendorsPage, type VendorsCursor } from "@/lib/vendors/list-query";
 
 const PROFILE_READY_THRESHOLD = 3;
 
-export default async function VendorsListPage() {
+export default async function VendorsListPage({
+  searchParams,
+}: {
+  searchParams: { cursor?: string };
+}) {
   const session = await auth();
   if (!session?.user) return null;
   const { organizationId, role, id: userId } = session.user;
 
-  const rows = await withOrg(organizationId, async (tx) => {
+  const cursor = decodeCursor<VendorsCursor>(searchParams.cursor);
+
+  const { pageRows: rows, hasNext } = await withOrg(organizationId, async (tx) => {
     // PR6 — review #5: per-client read scope. clerk/viewer users with
     // explicit per-client grants must NOT see other clients' vendor
     // financial profiles. reviewer/admin/owner get org-wide.
@@ -37,27 +45,8 @@ export default async function VendorsListPage() {
               isNull(vendors.clientId),
               inArray(vendors.clientId, permitted),
             );
-    const where = clientFilter
-      ? and(eq(vendors.organizationId, organizationId), clientFilter)
-      : eq(vendors.organizationId, organizationId);
 
-    return tx
-      .select({
-        id: vendors.id,
-        name: vendors.name,
-        aliases: vendors.aliases,
-        invoiceCount: vendors.invoiceCount,
-        lastInvoiceDate: vendors.lastInvoiceDate,
-        spend30d: vendors.spend30d,
-        spend90d: vendors.spend90d,
-        avgInvoiceAmount: vendors.avgInvoiceAmount,
-        termsDriftDetected: vendors.termsDriftDetected,
-        duplicateSubmissionCount: vendors.duplicateSubmissionCount,
-      })
-      .from(vendors)
-      .where(where)
-      .orderBy(desc(vendors.invoiceCount), desc(vendors.lastInvoiceDate))
-      .limit(200);
+    return fetchVendorsPage(tx, { organizationId, clientFilter, cursor });
   });
 
   return (
@@ -131,6 +120,21 @@ export default async function VendorsListPage() {
               })}
             </tbody>
           </table>
+        </div>
+      )}
+
+      {hasNext && rows.length > 0 && (
+        <div className="mt-4 flex justify-end">
+          <Link
+            href={`/vendors?cursor=${encodeCursor({
+              invoiceCount: rows[rows.length - 1].invoiceCount,
+              lastInvoiceDate: rows[rows.length - 1].lastInvoiceDate,
+              id: rows[rows.length - 1].id,
+            } satisfies VendorsCursor)}`}
+            className="rounded-md border border-gray-300 bg-white px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-50"
+          >
+            Next page →
+          </Link>
         </div>
       )}
     </div>

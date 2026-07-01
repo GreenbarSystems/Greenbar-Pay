@@ -6,8 +6,9 @@ import {
   extractedInvoices,
   validationResults,
 } from "@/db/schema";
-import { and, desc, eq, inArray, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, lt, or, sql } from "drizzle-orm";
 import ApprovedExporter from "./ApprovedExporter";
+import { decodeCursor, encodeCursor, splitPage } from "@/lib/pagination";
 
 const STATUS_TABS = [
   { key: "needs_review", label: "Needs Review" },
@@ -24,10 +25,17 @@ type Status = (typeof STATUS_TABS)[number]["key"];
 // this as readonly and fail the overload check.
 const ACTIVE_REVIEW: Array<"pending" | "needs_review"> = ["pending", "needs_review"];
 
+const PAGE_SIZE = 100;
+
+interface ReviewCursor {
+  receivedAt: string; // ISO
+  id: string;
+}
+
 export default async function ReviewListPage({
   searchParams,
 }: {
-  searchParams: { status?: string };
+  searchParams: { status?: string; cursor?: string };
 }) {
   const session = await auth();
   if (!session?.user) return null;
@@ -37,7 +45,9 @@ export default async function ReviewListPage({
     (STATUS_TABS.find((t) => t.key === searchParams.status)?.key as Status) ??
     "needs_review";
 
-  const rows = await withOrg(organizationId, async (tx) => {
+  const cursor = decodeCursor<ReviewCursor>(searchParams.cursor);
+
+  const { pageRows: rows, hasNext } = await withOrg(organizationId, async (tx) => {
     // Pull the active validation_results errors via a lateral subquery.
     // PR2: append-only — filter to superseded_at IS NULL for the live row.
     const latestValidation = sql`(
@@ -60,7 +70,7 @@ export default async function ReviewListPage({
       where ol.extracted_invoice_id = ${extractedInvoices.id}
     )`;
 
-    const where =
+    const statusFilter =
       active === "all"
         ? and(
             eq(extractedInvoices.organizationId, organizationId),
@@ -71,7 +81,26 @@ export default async function ReviewListPage({
             eq(extractedInvoices.reviewStatus, active),
           );
 
-    return tx
+    // Cursor pagination: rows strictly after (cursor.receivedAt,
+    // cursor.id) in the same (receivedAt DESC, id DESC) order as the
+    // ORDER BY below. `id` is a stable tiebreaker for rows that share
+    // the exact same receivedAt timestamp — without it, LIMIT-based
+    // pagination can show duplicate or skipped rows across pages when
+    // timestamps tie (uncommon but real: batch uploads land at
+    // effectively the same instant).
+    const cursorFilter = cursor
+      ? or(
+          lt(documents.receivedAt, new Date(cursor.receivedAt)),
+          and(
+            eq(documents.receivedAt, new Date(cursor.receivedAt)),
+            lt(extractedInvoices.id, cursor.id),
+          ),
+        )
+      : undefined;
+
+    const where = cursorFilter ? and(statusFilter, cursorFilter) : statusFilter;
+
+    const fetched = await tx
       .select({
         id: extractedInvoices.id,
         documentId: extractedInvoices.documentId,
@@ -88,8 +117,10 @@ export default async function ReviewListPage({
       .from(extractedInvoices)
       .innerJoin(documents, eq(documents.id, extractedInvoices.documentId))
       .where(where)
-      .orderBy(desc(documents.receivedAt))
-      .limit(100);
+      .orderBy(desc(documents.receivedAt), desc(extractedInvoices.id))
+      .limit(PAGE_SIZE + 1);
+
+    return splitPage(fetched, PAGE_SIZE);
   });
 
   return (
@@ -208,6 +239,20 @@ export default async function ReviewListPage({
               })}
             </tbody>
           </table>
+        </div>
+      )}
+
+      {hasNext && rows.length > 0 && (
+        <div className="mt-4 flex justify-end">
+          <Link
+            href={`/review?status=${active}&cursor=${encodeCursor({
+              receivedAt: rows[rows.length - 1].receivedAt.toISOString(),
+              id: rows[rows.length - 1].id,
+            } satisfies ReviewCursor)}`}
+            className="rounded-md border border-gray-300 bg-white px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-50"
+          >
+            Next page →
+          </Link>
         </div>
       )}
     </div>

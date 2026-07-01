@@ -2,15 +2,43 @@ import Link from "next/link";
 import { auth } from "@/lib/auth";
 import { withOrg } from "@/db/client";
 import { exports as exportsTable, users } from "@/db/schema";
-import { desc, eq } from "drizzle-orm";
+import { and, desc, eq, lt, or } from "drizzle-orm";
+import { decodeCursor, encodeCursor, splitPage } from "@/lib/pagination";
 
-export default async function ExportsPage() {
+const PAGE_SIZE = 100;
+
+interface ExportsCursor {
+  createdAt: string; // ISO
+  id: string;
+}
+
+export default async function ExportsPage({
+  searchParams,
+}: {
+  searchParams: { cursor?: string };
+}) {
   const session = await auth();
   if (!session?.user) return null;
   const { organizationId } = session.user;
 
-  const rows = await withOrg(organizationId, async (tx) => {
-    return tx
+  const cursor = decodeCursor<ExportsCursor>(searchParams.cursor);
+
+  const { pageRows: rows, hasNext } = await withOrg(organizationId, async (tx) => {
+    const orgFilter = eq(exportsTable.organizationId, organizationId);
+    // Same stable-tiebreaker rationale as the review queue: two
+    // exports created in the same job-polling tick can share a
+    // createdAt timestamp.
+    const cursorFilter = cursor
+      ? or(
+          lt(exportsTable.createdAt, new Date(cursor.createdAt)),
+          and(
+            eq(exportsTable.createdAt, new Date(cursor.createdAt)),
+            lt(exportsTable.id, cursor.id),
+          ),
+        )
+      : undefined;
+
+    const fetched = await tx
       .select({
         id: exportsTable.id,
         format: exportsTable.format,
@@ -24,9 +52,11 @@ export default async function ExportsPage() {
       })
       .from(exportsTable)
       .leftJoin(users, eq(users.id, exportsTable.createdBy))
-      .where(eq(exportsTable.organizationId, organizationId))
-      .orderBy(desc(exportsTable.createdAt))
-      .limit(100);
+      .where(cursorFilter ? and(orgFilter, cursorFilter) : orgFilter)
+      .orderBy(desc(exportsTable.createdAt), desc(exportsTable.id))
+      .limit(PAGE_SIZE + 1);
+
+    return splitPage(fetched, PAGE_SIZE);
   });
 
   return (
@@ -85,6 +115,20 @@ export default async function ExportsPage() {
               ))}
             </tbody>
           </table>
+        </div>
+      )}
+
+      {hasNext && rows.length > 0 && (
+        <div className="mt-4 flex justify-end">
+          <Link
+            href={`/exports?cursor=${encodeCursor({
+              createdAt: rows[rows.length - 1].createdAt.toISOString(),
+              id: rows[rows.length - 1].id,
+            } satisfies ExportsCursor)}`}
+            className="rounded-md border border-gray-300 bg-white px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-50"
+          >
+            Next page →
+          </Link>
         </div>
       )}
     </div>
