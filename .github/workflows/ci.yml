@@ -53,6 +53,14 @@ jobs:
       - run: npm run typecheck:worker  # asserts worker compiles without src/app
       - run: npm run db:generate
       - run: npm run db:migrate
+      # Regression test for the 0030 partition-backfill bug: seeds
+      # synthetic audit_events rows across several months (including
+      # the current month) into a throwaway DB, then runs 0030 against
+      # that pre-populated state. db:migrate above only proves 0030
+      # applies to an EMPTY database, which is exactly what let the
+      # original bug through CI twice — DEFAULT partitions don't
+      # auto-migrate rows the way that version assumed.
+      - run: npm run db:verify-partition-backfill
       # Addendum §1.6 — cross-tenant RLS gate.
       - run: npm run test:rls
       - run: npm test
