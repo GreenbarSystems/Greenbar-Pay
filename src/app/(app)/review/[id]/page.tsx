@@ -40,57 +40,156 @@ export default async function ReviewDetailPage({
       .limit(1);
     if (!invoice) return null;
 
-    const [doc] = await tx
-      .select()
-      .from(documents)
-      .where(eq(documents.id, invoice.documentId))
-      .limit(1);
+    // PERF — these 8 lookups only depend on `invoice` (its id/documentId/
+    // clientId, all already known at this point), not on each other, so
+    // they're issued together via Promise.all instead of one `await` per
+    // statement. Note on what this does and doesn't buy: these queries
+    // share the SAME transaction/connection (`tx`), and Postgres/node-
+    // postgres process one statement at a time per connection — this
+    // does NOT make them execute concurrently on the database side.
+    // What it DOES remove is the JS-side round-trip stacking between
+    // each `await` (a scheduling tick per statement); it also expresses
+    // the real data-independence directly in the code instead of an
+    // arbitrary-looking sequence of awaits. `vendorProfile` genuinely
+    // depends on `latestVendorMatch`'s result and stays a separate,
+    // subsequent step.
+    const [doc, lines, latestValidation, latestVendorMatch, audits, overrideRow, briefingCard, composedRole] =
+      await Promise.all([
+        tx
+          .select()
+          .from(documents)
+          .where(eq(documents.id, invoice.documentId))
+          .limit(1)
+          .then((rows) => rows[0]),
 
-    // PR11 H8 — explicit projection. select() was shipping the new
-    // Phase 9 hist_avg_price, hist_stddev_price, and stddev_distance
-    // columns to the browser via the RSC payload — per-vendor financial
-    // baselines that the UI never renders. The confidence chip + tooltip
-    // only use confidence_score + confidence_reason; everything else
-    // belongs in the sanctioned validation_results lineage, not the
-    // wire.
-    const lines = await tx
-      .select({
-        id: extractedInvoiceLines.id,
-        lineNumber: extractedInvoiceLines.lineNumber,
-        description: extractedInvoiceLines.description,
-        quantity: extractedInvoiceLines.quantity,
-        unitPrice: extractedInvoiceLines.unitPrice,
-        amount: extractedInvoiceLines.amount,
-        confidenceScore: extractedInvoiceLines.confidenceScore,
-        confidenceReason: extractedInvoiceLines.confidenceReason,
-      })
-      .from(extractedInvoiceLines)
-      .where(eq(extractedInvoiceLines.extractedInvoiceId, invoice.id))
-      .orderBy(extractedInvoiceLines.lineNumber);
+        // PR11 H8 — explicit projection. select() was shipping the new
+        // Phase 9 hist_avg_price, hist_stddev_price, and stddev_distance
+        // columns to the browser via the RSC payload — per-vendor
+        // financial baselines that the UI never renders. The confidence
+        // chip + tooltip only use confidence_score + confidence_reason;
+        // everything else belongs in the sanctioned validation_results
+        // lineage, not the wire.
+        tx
+          .select({
+            id: extractedInvoiceLines.id,
+            lineNumber: extractedInvoiceLines.lineNumber,
+            description: extractedInvoiceLines.description,
+            quantity: extractedInvoiceLines.quantity,
+            unitPrice: extractedInvoiceLines.unitPrice,
+            amount: extractedInvoiceLines.amount,
+            confidenceScore: extractedInvoiceLines.confidenceScore,
+            confidenceReason: extractedInvoiceLines.confidenceReason,
+          })
+          .from(extractedInvoiceLines)
+          .where(eq(extractedInvoiceLines.extractedInvoiceId, invoice.id))
+          .orderBy(extractedInvoiceLines.lineNumber),
 
-    // PR2: filter on superseded_at IS NULL — prior runs are preserved
-    // but only the active row drives UI state.
-    const [latestValidation] = await tx
-      .select()
-      .from(validationResults)
-      .where(
-        and(
-          eq(validationResults.entityType, "extracted_invoice"),
-          eq(validationResults.entityId, invoice.id),
-          isNull(validationResults.supersededAt),
-        ),
-      )
-      .orderBy(desc(validationResults.createdAt))
-      .limit(1);
+        // PR2: filter on superseded_at IS NULL — prior runs are
+        // preserved but only the active row drives UI state.
+        tx
+          .select()
+          .from(validationResults)
+          .where(
+            and(
+              eq(validationResults.entityType, "extracted_invoice"),
+              eq(validationResults.entityId, invoice.id),
+              isNull(validationResults.supersededAt),
+            ),
+          )
+          .orderBy(desc(validationResults.createdAt))
+          .limit(1)
+          .then((rows) => rows[0]),
 
-    const [latestVendorMatch] = await tx
-      .select()
-      .from(vendorMatches)
-      .where(eq(vendorMatches.extractedInvoiceId, invoice.id))
-      .orderBy(desc(vendorMatches.createdAt))
-      .limit(1);
+        tx
+          .select()
+          .from(vendorMatches)
+          .where(eq(vendorMatches.extractedInvoiceId, invoice.id))
+          .orderBy(desc(vendorMatches.createdAt))
+          .limit(1)
+          .then((rows) => rows[0]),
 
-    // Phase 7 — D1: pull the vendor profile snapshot for the side card.
+        tx
+          .select()
+          .from(auditEvents)
+          .where(
+            and(
+              eq(auditEvents.entityType, "extracted_invoice"),
+              eq(auditEvents.entityId, invoice.id),
+            ),
+          )
+          .orderBy(desc(auditEvents.createdAt))
+          .limit(20),
+
+        // Phase 11.2 — F02 override log row when present. Joined with
+        // users to surface the second-approver name in the badge
+        // without a second client-side fetch. invoice_override_log is
+        // append-only (DB-level RULE) so at most one row exists per
+        // invoice; LIMIT 1 is a defensive bound, not a correctness
+        // requirement.
+        tx
+          .select({
+            id: invoiceOverrideLog.id,
+            approvedAt: invoiceOverrideLog.approvedAt,
+            blockingFindingCodes: invoiceOverrideLog.blockingFindingCodes,
+            secondApproverName: users.name,
+            secondApproverEmail: users.email,
+          })
+          .from(invoiceOverrideLog)
+          .leftJoin(users, eq(users.id, invoiceOverrideLog.secondApproverId))
+          .where(eq(invoiceOverrideLog.extractedInvoiceId, invoice.id))
+          .limit(1)
+          .then((rows) => rows[0]),
+
+        // Phase 8 — D2: pull the active briefing card (filtered to
+        // superseded_at IS NULL — same append-only pattern as
+        // validation).
+        //
+        // PR7 — review #5: explicit projection. The review detail UI
+        // only renders these fields; selecting * also dragged
+        // vendor_context_json and risk_factors_json (full snapshot
+        // blobs) over the wire and into server memory for nothing.
+        // Evidence packet (Phase 11) re-fetches the full row from the
+        // DB; UI doesn't need it here.
+        tx
+          .select({
+            // Phase 10 — D5 adds coachingPromptsJson; otherwise
+            // unchanged.
+            id: briefingCards.id,
+            glCode: briefingCards.glCode,
+            glRationale: briefingCards.glRationale,
+            anomalyFlagsJson: briefingCards.anomalyFlagsJson,
+            deltaSummary: briefingCards.deltaSummary,
+            riskScore: briefingCards.riskScore,
+            riskJustification: briefingCards.riskJustification,
+            coachingPromptsJson: briefingCards.coachingPromptsJson,
+            createdAt: briefingCards.createdAt,
+          })
+          .from(briefingCards)
+          .where(
+            and(
+              eq(briefingCards.extractedInvoiceId, invoice.id),
+              isNull(briefingCards.supersededAt),
+            ),
+          )
+          .orderBy(desc(briefingCards.createdAt))
+          .limit(1)
+          .then((rows) => rows[0]),
+
+        // Phase 11.2 — resolve effective role against the invoice's
+        // clientId so the UI gate matches the route's gate exactly.
+        // Mirrors the approve route's role composition:
+        // invoice.override requires admin/owner at either the org or
+        // the client level.
+        loadEffectiveRole(tx, {
+          userId,
+          clientId: invoice.clientId,
+          orgRole: role,
+        }),
+      ]);
+
+    // Phase 7 — D1: pull the vendor profile snapshot for the side
+    // card. Genuinely dependent on latestVendorMatch's result above,
+    // so this stays a separate step rather than joining the batch.
     let vendorProfile: typeof vendors.$inferSelect | null = null;
     if (latestVendorMatch?.vendorId) {
       const [v] = await tx
@@ -100,77 +199,6 @@ export default async function ReviewDetailPage({
         .limit(1);
       vendorProfile = v ?? null;
     }
-
-    const audits = await tx
-      .select()
-      .from(auditEvents)
-      .where(
-        and(
-          eq(auditEvents.entityType, "extracted_invoice"),
-          eq(auditEvents.entityId, invoice.id),
-        ),
-      )
-      .orderBy(desc(auditEvents.createdAt))
-      .limit(20);
-
-    // Phase 11.2 — F02 override log row when present. Joined with
-    // users to surface the second-approver name in the badge without
-    // a second client-side fetch. invoice_override_log is append-only
-    // (DB-level RULE) so at most one row exists per invoice; LIMIT 1
-    // is a defensive bound, not a correctness requirement.
-    const [overrideRow] = await tx
-      .select({
-        id: invoiceOverrideLog.id,
-        approvedAt: invoiceOverrideLog.approvedAt,
-        blockingFindingCodes: invoiceOverrideLog.blockingFindingCodes,
-        secondApproverName: users.name,
-        secondApproverEmail: users.email,
-      })
-      .from(invoiceOverrideLog)
-      .leftJoin(users, eq(users.id, invoiceOverrideLog.secondApproverId))
-      .where(eq(invoiceOverrideLog.extractedInvoiceId, invoice.id))
-      .limit(1);
-
-    // Phase 8 — D2: pull the active briefing card (filtered to
-    // superseded_at IS NULL — same append-only pattern as validation).
-    //
-    // PR7 — review #5: explicit projection. The review detail UI only
-    // renders these fields; selecting * also dragged vendor_context_json
-    // and risk_factors_json (full snapshot blobs) over the wire and into
-    // server memory for nothing. Evidence packet (Phase 11) re-fetches
-    // the full row from the DB; UI doesn't need it here.
-    const [briefingCard] = await tx
-      .select({
-        // Phase 10 — D5 adds coachingPromptsJson; otherwise unchanged.
-        id: briefingCards.id,
-        glCode: briefingCards.glCode,
-        glRationale: briefingCards.glRationale,
-        anomalyFlagsJson: briefingCards.anomalyFlagsJson,
-        deltaSummary: briefingCards.deltaSummary,
-        riskScore: briefingCards.riskScore,
-        riskJustification: briefingCards.riskJustification,
-        coachingPromptsJson: briefingCards.coachingPromptsJson,
-        createdAt: briefingCards.createdAt,
-      })
-      .from(briefingCards)
-      .where(
-        and(
-          eq(briefingCards.extractedInvoiceId, invoice.id),
-          isNull(briefingCards.supersededAt),
-        ),
-      )
-      .orderBy(desc(briefingCards.createdAt))
-      .limit(1);
-
-    // Phase 11.2 — resolve effective role against the invoice's
-    // clientId so the UI gate matches the route's gate exactly.
-    // Mirrors the approve route's role composition: invoice.override
-    // requires admin/owner at either the org or the client level.
-    const composedRole = await loadEffectiveRole(tx, {
-      userId,
-      clientId: invoice.clientId,
-      orgRole: role,
-    });
 
     return {
       invoice,

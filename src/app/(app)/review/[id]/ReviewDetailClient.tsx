@@ -10,7 +10,7 @@
  *   §4.7 concurrency rejects stale edits with a 409.
  * - Approve / reject use `Idempotency-Key` (§4.6).
  */
-import { useEffect, useRef, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import dynamic from "next/dynamic";
 import { useRouter } from "next/navigation";
 import type { UserRole } from "@/lib/rbac";
@@ -1312,12 +1312,26 @@ function BriefingCardPanel({
   );
 }
 
+const ANOMALY_SEVERITY_CLASS: Record<"info" | "warning" | "critical", string> = {
+  info: "bg-gray-100 text-gray-800",
+  warning: "bg-amber-100 text-amber-800",
+  critical: "bg-red-100 text-red-800",
+};
+
 /**
  * Phase 9 — F07 evidence chain expander. Click the flag's severity chip
  * to expand the reasoning steps. Collapsed by default so the briefing
  * card stays at-a-glance scannable.
+ *
+ * PERF — wrapped in memo(). This component owns its own `open` state
+ * and renders purely off its `flag` prop, so when the parent re-renders
+ * for an unrelated reason (e.g. a keystroke in the header form editor
+ * elsewhere on the page), each already-mounted item skips re-rendering
+ * as long as its `flag` object reference is unchanged. At dozens of
+ * anomaly flags per briefing card, this avoids re-running every item's
+ * render body on every keystroke.
  */
-function AnomalyFlagItem({
+const AnomalyFlagItem = memo(function AnomalyFlagItem({
   flag,
 }: {
   flag: {
@@ -1328,11 +1342,7 @@ function AnomalyFlagItem({
   };
 }) {
   const [open, setOpen] = useState(false);
-  const severityClass = {
-    info: "bg-gray-100 text-gray-800",
-    warning: "bg-amber-100 text-amber-800",
-    critical: "bg-red-100 text-red-800",
-  }[flag.severity];
+  const severityClass = ANOMALY_SEVERITY_CLASS[flag.severity];
   const hasChain = Array.isArray(flag.evidenceChain) && flag.evidenceChain.length > 0;
 
   return (
@@ -1360,7 +1370,7 @@ function AnomalyFlagItem({
       )}
     </li>
   );
-}
+});
 
 /**
  * Phase 9 — F06: line-item confidence chip. Tooltip shows the reason
@@ -1403,6 +1413,12 @@ function LineConfidenceChip({
  * F03 — Behavioural nudges: messages are loss-framed by the compute
  * function. We don't reformat them here; the panel is a thin renderer.
  */
+const COACHING_SEVERITY_CLASS: Record<"info" | "warning" | "critical", string> = {
+  info: "border-l-2 border-sky-400 bg-sky-50",
+  warning: "border-l-2 border-amber-400 bg-amber-50",
+  critical: "border-l-2 border-red-400 bg-red-50",
+};
+
 function CoachingPanel({
   invoiceId,
   briefingCardId,
@@ -1418,7 +1434,14 @@ function CoachingPanel({
   }>;
 }) {
   const [dismissed, setDismissed] = useState<Set<string>>(new Set());
-  const visible = prompts.filter((p) => !dismissed.has(p.code));
+  // PERF — was a plain filter recomputed on every render, including
+  // re-renders triggered by unrelated state elsewhere in the parent
+  // (e.g. every keystroke in the form editor). Memoized so it only
+  // re-runs when the prompt list or the dismissed set actually change.
+  const visible = useMemo(
+    () => prompts.filter((p) => !dismissed.has(p.code)),
+    [prompts, dismissed],
+  );
 
   async function dismiss(code: string) {
     // Optimistic — never block the UI on the audit log write.
@@ -1473,11 +1496,10 @@ function CoachingPanel({
       </div>
       <ul className="space-y-2">
         {visible.map((p) => {
-          const severityClass = {
-            info: "border-l-2 border-sky-400 bg-sky-50",
-            warning: "border-l-2 border-amber-400 bg-amber-50",
-            critical: "border-l-2 border-red-400 bg-red-50",
-          }[p.severity];
+          // PERF — was an object literal allocated fresh per item per
+          // render; hoisted to a module-level constant (COACHING_SEVERITY_CLASS
+          // below) since the mapping never changes.
+          const severityClass = COACHING_SEVERITY_CLASS[p.severity];
           return (
             <li
               key={p.code}
