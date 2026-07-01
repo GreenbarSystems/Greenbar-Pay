@@ -125,11 +125,25 @@ async function updateLineConfidenceBatch(
 
   // PR18 C4 — batch the per-line confidence writes into one CASE
   // UPDATE instead of one round trip per line. Per-value bindings go
-  // through the sql tag — only the static column name and CASE keyword
-  // reach sql.raw, both hard-coded literals.
-  const caseExpr = (column: string, pick: (u: LineConfidenceUpdate) => unknown) => {
+  // through the sql tag — only the static column name, CASE keyword,
+  // and cast type reach sql.raw, all hard-coded literals.
+  //
+  // Explicit cast on the whole CASE expression: when every THEN branch
+  // in a batch binds a JS `null` (e.g. histSampleCount for a
+  // never-before-seen item keyword — no vendor pricing history to
+  // report), the expression has no typed column reference to infer
+  // from and Postgres defaults it to `text`, which the numeric/integer
+  // target columns then reject ("column is of type integer but
+  // expression is of type text"). Casting removes the ambiguity
+  // regardless of how many rows are null in this batch.
+  const caseExpr = (
+    column: string,
+    pick: (u: LineConfidenceUpdate) => unknown,
+    castType?: "int" | "numeric",
+  ) => {
     const chunks = updates.map((u) => sql`WHEN ${u.lineId}::uuid THEN ${pick(u)}`);
-    return sql.join([sql.raw(`CASE ${column}`), ...chunks, sql.raw("END")], sql.raw(" "));
+    const expr = sql.join([sql.raw(`CASE ${column}`), ...chunks, sql.raw("END")], sql.raw(" "));
+    return castType ? sql`(${expr})::${sql.raw(castType)}` : expr;
   };
 
   await tx
@@ -137,10 +151,10 @@ async function updateLineConfidenceBatch(
     .set({
       confidenceScore: caseExpr("id", (u) => u.score),
       confidenceReason: caseExpr("id", (u) => u.reason),
-      histSampleCount: caseExpr("id", (u) => u.histSampleCount),
-      histAvgPrice: caseExpr("id", (u) => u.histAvgPrice),
-      histStddevPrice: caseExpr("id", (u) => u.histStddevPrice),
-      stddevDistance: caseExpr("id", (u) => u.stddevDistance),
+      histSampleCount: caseExpr("id", (u) => u.histSampleCount, "int"),
+      histAvgPrice: caseExpr("id", (u) => u.histAvgPrice, "numeric"),
+      histStddevPrice: caseExpr("id", (u) => u.histStddevPrice, "numeric"),
+      stddevDistance: caseExpr("id", (u) => u.stddevDistance, "numeric"),
       updatedAt: sql`now()`,
     })
     .where(inArray(extractedInvoiceLines.id, lineIds));
