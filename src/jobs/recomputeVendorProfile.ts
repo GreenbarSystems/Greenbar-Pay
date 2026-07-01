@@ -25,6 +25,7 @@
 import type PgBoss from "pg-boss";
 import {
   and,
+  desc,
   eq,
   inArray,
   or,
@@ -44,6 +45,38 @@ import { JOB } from "@/lib/queue";
 
 /** Cap historical samples per (vendor, item_keyword) to keep the math bounded. */
 const PRICING_SAMPLE_CAP = 50;
+
+/**
+ * Safety bound on the org-wide vendor-invoice scan (line ~110) and the
+ * line-item scan (line ~280). Both queries are unbounded by row count
+ * as written — a vendor with tens of thousands of approved invoices
+ * (a real risk at scale: high-volume recurring billing vendors)
+ * fetches every matching row into Node memory before any per-keyword
+ * capping happens. ORDER BY invoiceDate DESC + this LIMIT bounds worst-
+ * case memory while preserving correctness for the numbers that matter:
+ *   - spend_30d / spend_90d are already date-windowed to ≤90 days, so
+ *     they're exact as long as the cap captures at least the last 90
+ *     days of invoices for this vendor — true for any vendor whose
+ *     invoice volume doesn't itself exceed this cap within 90 days.
+ *   - invoiceCount / avgInvoiceAmount / duplicateSubmissionCount become
+ *     an approximation over the most recent MAX_VENDOR_INVOICE_ROWS
+ *     invoices once a vendor exceeds this cap — an explicit, documented
+ *     tradeoff favoring a bounded worker process over an exact count
+ *     for a pathological outlier, rather than an unbounded fetch that
+ *     risks OOMing the worker.
+ */
+const MAX_VENDOR_INVOICE_ROWS = 100_000;
+
+/**
+ * Safety bound on the line-item scan feeding pricing history. Each
+ * (vendor, keyword) series is already capped at PRICING_SAMPLE_CAP (50)
+ * AFTER the full fetch — this bounds the fetch ITSELF, before that
+ * per-keyword capping runs. 20,000 rows comfortably covers the most
+ * recent 50 samples across hundreds of distinct item keywords for a
+ * single vendor while keeping the query's memory footprint bounded
+ * (roughly a few MB) regardless of how much invoice history exists.
+ */
+const MAX_PRICING_LINE_ROWS = 20_000;
 
 const STOP_WORDS = new Set([
   "a", "an", "and", "for", "in", "of", "on", "or", "the", "to", "with",
@@ -123,7 +156,14 @@ export async function handleRecomputeVendorProfile(
           ),
         ),
       )
-      .where(eq(extractedInvoices.organizationId, organizationId));
+      .where(eq(extractedInvoices.organizationId, organizationId))
+      // NULLS LAST: a null invoiceDate never contributes to the date-
+      // windowed spend/mode calculations below (guarded by `if
+      // (r.invoiceDate)`), so it should never displace a real dated
+      // row from the cap. Postgres's default DESC ordering puts NULLs
+      // FIRST, which would do exactly that without this.
+      .orderBy(sql`${extractedInvoices.invoiceDate} DESC NULLS LAST`)
+      .limit(MAX_VENDOR_INVOICE_ROWS);
 
     const invoiceRows = allVendorInvoices.filter(
       (r) => r.reviewStatus === "approved" || r.reviewStatus === "exported",
@@ -288,7 +328,17 @@ export async function handleRecomputeVendorProfile(
           eq(extractedInvoiceLines.organizationId, organizationId),
           inArray(extractedInvoiceLines.extractedInvoiceId, approvedInvoiceIds),
         ),
-      );
+      )
+      // Most-recent-first + bounded fetch (see MAX_PRICING_LINE_ROWS).
+      // The per-keyword cap (PRICING_SAMPLE_CAP, applied below via
+      // truncateToMostRecent) only bounds memory AFTER this fetch
+      // completes — this bounds the fetch itself. NULLS LAST for the
+      // same reason as the invoice scan above: a line item with no
+      // parent invoiceDate is skipped by the `if (r.invoiceDate)`
+      // branch in the grouping loop below, so it shouldn't be able to
+      // displace a real dated sample from the cap.
+      .orderBy(sql`${extractedInvoices.invoiceDate} DESC NULLS LAST`)
+      .limit(MAX_PRICING_LINE_ROWS);
 
     // Phase 9 — D3: keep the full price series per keyword so we can
     // compute stddev / min / max / last / trend, not just the running
