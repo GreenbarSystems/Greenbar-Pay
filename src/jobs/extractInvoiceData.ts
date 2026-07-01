@@ -189,12 +189,17 @@ async function persistOutcome(
 
     // Successful extraction: supersede + insert + advance status.
     if (outcome.kind === "succeeded") {
-      // §4.2 supersede.
+      // §4.2 supersede. organizationId is redundant under RLS (this tx
+      // is already scoped to the caller's org via withOrgAsWorker), but
+      // included as defense-in-depth: if RLS were ever misconfigured or
+      // bypassed for this connection, the WHERE clause alone still
+      // can't touch another org's rows.
       await tx
         .update(extractedInvoices)
         .set({ reviewStatus: "superseded", updatedAt: sql`now()` })
         .where(
           and(
+            eq(extractedInvoices.organizationId, organizationId),
             eq(extractedInvoices.documentId, documentId),
             inArray(extractedInvoices.reviewStatus, ["pending", "needs_review"]),
           ),
