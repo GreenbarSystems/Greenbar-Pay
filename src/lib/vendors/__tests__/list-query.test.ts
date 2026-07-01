@@ -25,15 +25,42 @@ let userDb: ReturnType<typeof drizzle<typeof schema>>;
 let adminDb: ReturnType<typeof drizzle<typeof schema>>;
 let orgId: string;
 
-// Ties at invoiceCount=5: one NULL lastInvoiceDate, one real date, to
-// exercise the NULLS-LAST-DESC sentinel substitution. Named vendors so
-// assertions read clearly instead of by index.
+// Ties at invoiceCount=5: Acme/Gamma share both sort keys (invoiceCount,
+// lastInvoiceDate), so their relative order depends entirely on the id
+// DESC tiebreaker — explicit ids make that deterministic instead of
+// depending on defaultRandom() UUID generation order. Beta's NULL
+// lastInvoiceDate exercises the NULLS-LAST-DESC sentinel substitution.
 const SEED = [
-  { name: "Zenith Supplies", invoiceCount: 10, lastInvoiceDate: "2026-06-01" },
-  { name: "Acme Corp", invoiceCount: 5, lastInvoiceDate: "2026-05-01" },
-  { name: "Beta LLC", invoiceCount: 5, lastInvoiceDate: null },
-  { name: "Gamma Inc", invoiceCount: 5, lastInvoiceDate: "2026-05-01" },
-  { name: "Delta Co", invoiceCount: 1, lastInvoiceDate: null },
+  {
+    id: "00000000-0000-0000-0000-000000000005",
+    name: "Zenith Supplies",
+    invoiceCount: 10,
+    lastInvoiceDate: "2026-06-01",
+  },
+  {
+    id: "00000000-0000-0000-0000-000000000001",
+    name: "Acme Corp",
+    invoiceCount: 5,
+    lastInvoiceDate: "2026-05-01",
+  },
+  {
+    id: "00000000-0000-0000-0000-000000000003",
+    name: "Beta LLC",
+    invoiceCount: 5,
+    lastInvoiceDate: null,
+  },
+  {
+    id: "00000000-0000-0000-0000-000000000002",
+    name: "Gamma Inc",
+    invoiceCount: 5,
+    lastInvoiceDate: "2026-05-01",
+  },
+  {
+    id: "00000000-0000-0000-0000-000000000004",
+    name: "Delta Co",
+    invoiceCount: 1,
+    lastInvoiceDate: null,
+  },
 ] as const;
 
 beforeAll(async () => {
@@ -53,6 +80,7 @@ beforeAll(async () => {
 
   await adminDb.insert(vendors).values(
     SEED.map((v) => ({
+      id: v.id,
       organizationId: orgId,
       name: v.name,
       normalizedName: v.name.toLowerCase(),
@@ -81,8 +109,8 @@ describe("fetchVendorsPage cursor pagination", () => {
       expect(hasNext).toBe(false);
       expect(pageRows.map((r) => r.name)).toEqual([
         "Zenith Supplies",
-        "Acme Corp",
         "Gamma Inc",
+        "Acme Corp",
         "Beta LLC",
         "Delta Co",
       ]);
@@ -122,8 +150,8 @@ describe("fetchVendorsPage cursor pagination", () => {
 
       expect(seen).toEqual([
         "Zenith Supplies",
-        "Acme Corp",
         "Gamma Inc",
+        "Acme Corp",
         "Beta LLC",
         "Delta Co",
       ]);
