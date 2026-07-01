@@ -1428,17 +1428,31 @@ function CoachingPanel({
       return next;
     });
     try {
-      await fetch(`/api/ap/review/${invoiceId}/coaching/dismiss`, {
+      const res = await fetch(`/api/ap/review/${invoiceId}/coaching/dismiss`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ promptCode: code, briefingCardId }),
       });
-    } catch {
-      // If the audit write fails, we still hide the prompt for the
-      // session — the user has clearly indicated they don't want to
-      // see it. The compliance gap (no log entry) is preferable to a
-      // sticky prompt the reviewer can't dismiss.
+      if (!res.ok) {
+        // Non-2xx (403, 404, 500, ...) — the audit event did not land.
+        // Logged so this is at least visible in browser telemetry /
+        // error monitoring rather than a fully silent gap. Still
+        // deliberately non-blocking: see the comment below.
+        console.error(
+          `[coaching] dismiss audit write failed: HTTP ${res.status} (invoice ${invoiceId}, prompt ${code})`,
+        );
+      }
+    } catch (err) {
+      // Network failure — same non-blocking policy as a non-2xx above.
+      console.error(
+        `[coaching] dismiss audit write failed: ${(err as Error).message} (invoice ${invoiceId}, prompt ${code})`,
+      );
     }
+    // If the audit write fails, we still hide the prompt for the
+    // session — the user has clearly indicated they don't want to
+    // see it. The compliance gap (no log entry) is preferable to a
+    // sticky prompt the reviewer can't dismiss. Only the visibility
+    // into that gap changed above (console.error instead of silent).
   }
 
   if (visible.length === 0) {
