@@ -1,6 +1,13 @@
 services:
   postgres:
-    image: postgres:16
+    # Must match .github/workflows/ci.yml's postgres service image
+    # exactly. extraction_corrections.embedding is a pgvector `vector`
+    # column (src/db/schema/extractionCorrections.ts); plain postgres:16
+    # doesn't have the pgvector extension binary, so CREATE EXTENSION
+    # vector (src/db/migrate.ts) fails locally with a different error
+    # than a real "works in CI, not locally" scenario would need — it's
+    # a straight image mismatch, not a Postgres version difference.
+    image: pgvector/pgvector:pg16
     container_name: greenbar-pg
     environment:
       POSTGRES_USER: app_admin

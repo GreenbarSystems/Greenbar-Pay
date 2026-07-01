@@ -139,6 +139,35 @@ local commands quietly diverged from CI behaviour.
   TypeScript and ESLint never see. Prereq: `docker compose up -d
   postgres` so a server is reachable.
 
+  **`docker-compose.yml`'s `postgres` service image must stay
+  identical to `.github/workflows/ci.yml`'s** (currently
+  `pgvector/pgvector:pg16` in both — NOT plain `postgres:16`). These
+  drifted once already: local compose ran vanilla Postgres while CI
+  ran the pgvector image, so `CREATE EXTENSION vector`
+  (`src/db/migrate.ts`, needed by `extraction_corrections.embedding`)
+  passed in CI but would have failed differently — or not been
+  caught at all — against the local stack. If you ever bump the
+  Postgres major version or add another extension dependency, change
+  both files in the same commit.
+
+- **No local Postgres at all is a real, common case for this repo**
+  (e.g. an agent/dev environment with no Docker). In that situation
+  `npm test` silently skips every suite gated on `DATABASE_URL_ADMIN`
+  — that's not "probably fine," it's a complete blind spot, not an
+  approximation. A bug in that code (wrong SQL, a flaky assumption
+  like ordering on `defaultRandom()` UUIDs) will typecheck, lint, and
+  "pass" 100% of what did run, then fail for the first time in CI.
+  This has happened more than once. The fix isn't chasing each
+  instance after the fact — it's changing when you find out: **when
+  you cannot run a real Postgres locally, push commits that add or
+  change anything DB-only-testable (migrations, schema,
+  `DATABASE_URL_ADMIN`-gated tests) to a branch and wait for a green
+  CI run before merging to `main`, the same way this repo already
+  treats migrations.** Don't push that class of change straight to
+  `main` on the assumption that typecheck/lint/non-DB-tests passing
+  locally is sufficient — for DB-only-testable code, it isn't
+  evidence of anything.
+
 - **`.githooks/pre-commit`** automatically runs `db:migrate:check`
   when the staged diff touches `src/db/migrations/` or
   `src/db/schema/`. Installed by `scripts/setup-hooks.mjs` from the
