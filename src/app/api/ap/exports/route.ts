@@ -13,6 +13,17 @@
  *
  * The worker is idempotent on exportId (compare-and-set on exports.status).
  * The API itself is idempotent on Idempotency-Key.
+ *
+ * RBAC (PR3 pattern, mirrors invoice.approve / invoice.edit): the org
+ * role is a cheap fast path; if it doesn't grant invoice.export, every
+ * distinct client among the SELECTED invoices must have an explicit
+ * per-client grant for this user (§1.5 effective permission =
+ * max(orgRole, clientRole)). Previously this route only checked the
+ * org-wide role, which both over- and under-authorized: a clerk with
+ * only a per-client `reviewer` grant on client X couldn't export that
+ * client's invoices, and (once multi-client is unfrozen) a user with
+ * org-wide export could export another client's invoices without any
+ * per-client check at all — the first is the bug this closes.
  */
 import { NextResponse } from "next/server";
 import { and, eq, inArray } from "drizzle-orm";
@@ -25,7 +36,7 @@ import {
   extractedInvoices,
   auditEvents,
 } from "@/db/schema";
-import { requirePermission } from "@/lib/rbac";
+import { can, loadEffectiveRole } from "@/lib/rbac";
 import { withIdempotency } from "@/lib/review/idempotencyWrap";
 import { getQueue, JOB } from "@/lib/queue";
 import { isMultiClientEnabled } from "@/lib/featureFlags";
@@ -41,11 +52,11 @@ export async function POST(req: Request) {
   if (!session?.user) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   const { organizationId, role, id: userId } = session.user;
 
-  try {
-    requirePermission(role, "invoice.export");
-  } catch (err) {
-    return NextResponse.json({ error: (err as Error).message }, { status: 403 });
-  }
+  // PR3 pattern — org-role fast path. If this doesn't grant, we defer
+  // to the per-client lookup inside the tx once we know which clients
+  // the selected invoices belong to (a blanket 403 here would wrongly
+  // reject a user who only has a per-client export grant).
+  const hasOrgPermission = can(role, "invoice.export");
 
   let body;
   try {
@@ -78,6 +89,7 @@ export async function POST(req: Request) {
           .select({
             id: extractedInvoices.id,
             reviewStatus: extractedInvoices.reviewStatus,
+            clientId: extractedInvoices.clientId,
           })
           .from(extractedInvoices)
           .where(
@@ -104,6 +116,38 @@ export async function POST(req: Request) {
               })),
             },
           };
+        }
+
+        // PR3 — per-client RBAC. Solo mode (multi-client freeze) means
+        // every candidate's clientId is null, which loadEffectiveRole
+        // resolves straight to orgRole — this block is a no-op until
+        // the freeze lifts. Once multi-client work resumes, a user
+        // without org-wide export must hold an explicit grant on EVERY
+        // client represented among the selected invoices; missing even
+        // one fails the whole export (matches the all-or-nothing
+        // not_all_approved check above).
+        if (!hasOrgPermission) {
+          const distinctClientIds = Array.from(
+            new Set(candidates.map((c) => c.clientId)),
+          );
+          for (const clientId of distinctClientIds) {
+            const effRole = await loadEffectiveRole(tx, {
+              userId,
+              clientId,
+              orgRole: role,
+            });
+            if (!can(effRole, "invoice.export")) {
+              return {
+                status: 403,
+                body: {
+                  error: "forbidden",
+                  message: clientId
+                    ? `${effRole} lacks invoice.export for client ${clientId}`
+                    : `${effRole} lacks invoice.export`,
+                },
+              };
+            }
+          }
         }
 
         // 2. Insert exports row.
