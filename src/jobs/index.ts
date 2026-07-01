@@ -14,6 +14,7 @@ import { handleAssembleEvidencePacket } from "./assembleEvidencePacket";
 import { handleExtractContractData } from "./extractContractData";
 import { handleCaptureAndEmbedCorrection } from "./captureAndEmbedCorrection";
 import { handleCleanupIdempotencyKeys } from "./cleanupIdempotencyKeys";
+import { handleEnsureAuditEventPartitions } from "./ensureAuditEventPartitions";
 
 type Handler<N extends keyof JobPayloads> = (
   job: PgBoss.Job<JobPayloads[N]>,
@@ -114,5 +115,14 @@ export const HANDLERS: Array<{
     name: JOB.cleanupIdempotencyKeys,
     options: { batchSize: 1 },
     handler: handleCleanupIdempotencyKeys as Handler<keyof JobPayloads>,
+  },
+  {
+    // Hygiene — keeps audit_events' RANGE partitions (migration 0030)
+    // created ahead of the calendar. Scheduled daily via boss.schedule()
+    // in scripts/worker.ts. batchSize 1 — pure DDL maintenance, no
+    // concurrency benefit.
+    name: JOB.ensureAuditEventPartitions,
+    options: { batchSize: 1 },
+    handler: handleEnsureAuditEventPartitions as Handler<keyof JobPayloads>,
   },
 ];
