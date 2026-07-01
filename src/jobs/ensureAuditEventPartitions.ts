@@ -4,10 +4,19 @@
  * audit_events is RANGE-partitioned by created_at (monthly), added in
  * migration 0030. New partitions must exist BEFORE a row with a
  * matching created_at is inserted, or the write falls into the
- * DEFAULT partition — still correct (no insert failure), just loses
- * the per-month performance benefit and, left unmaintained, would
- * grow the DEFAULT partition unbounded over time as every month's
- * data piles into it.
+ * DEFAULT partition.
+ *
+ * IMPORTANT — this is NOT a benign fallback. If this job stops
+ * running (worker down, cron misconfigured) for longer than
+ * MONTHS_AHEAD, writes for the un-created month accumulate in
+ * DEFAULT. When the job resumes and tries to create that overdue
+ * month's partition, create_audit_events_partition() will FAIL —
+ * Postgres scans DEFAULT for conflicting rows before creating an
+ * overlapping partition and errors out if it finds any; it does not
+ * auto-migrate them. See CLAUDE.md "Recovering a missed audit_events
+ * partition" for the manual fix if this job's logs ever show that
+ * error. Retrying the job blindly will fail the same way every time
+ * until the conflicting rows are moved out by hand.
  *
  * Calls the create_audit_events_partition(month_start date) SQL
  * function (idempotent — CREATE TABLE IF NOT EXISTS, safe to call
