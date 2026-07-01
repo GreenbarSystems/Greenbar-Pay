@@ -13,7 +13,7 @@
  * must be migrated to match.
  */
 import { describe, it, expect } from "vitest";
-import { normalizeVendor } from "@/lib/validation";
+import { normalizeVendor } from "@/modules/validation/domain/engine";
 
 describe("normalizeVendor / normalize_vendor_text parity fixtures", () => {
   const cases: Array<[string, string]> = [

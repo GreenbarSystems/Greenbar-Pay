@@ -5,7 +5,7 @@ import {
   duplicateKey,
   normalizeVendor,
   MATH_TOLERANCE,
-} from "@/lib/validation";
+} from "@/modules/validation/domain/engine";
 
 // Typecheck-sweep — explicit nullable types so individual tests can
 // override with `null` without the literal-narrowing inference

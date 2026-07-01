@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { matchVendor } from "@/lib/validation/vendor-match";
+import { matchVendor } from "@/modules/validation/domain/vendor-matching";
 
 const v = (
   id: string,

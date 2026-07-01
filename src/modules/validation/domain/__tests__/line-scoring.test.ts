@@ -7,7 +7,7 @@ import {
   isRateDrift,
   RATE_DRIFT_MIN_SAMPLES,
   RATE_DRIFT_THRESHOLD,
-} from "@/lib/validation/line-score";
+} from "@/modules/validation/domain/line-scoring";
 
 describe("scoreLine", () => {
   it("returns null when the line has no unit price", () => {

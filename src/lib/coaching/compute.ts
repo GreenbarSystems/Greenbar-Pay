@@ -30,7 +30,7 @@
  * frozen at approve time via the pinned activeBriefingCardId (PR6).
  */
 
-import type { ValidationFinding } from "@/lib/validation";
+import type { ValidationFinding } from "@/modules/validation";
 
 export type CoachingSeverity = "info" | "warning" | "critical";
 

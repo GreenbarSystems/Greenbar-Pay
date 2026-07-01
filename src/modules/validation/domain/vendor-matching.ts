@@ -1,5 +1,7 @@
 /**
- * Vendor matching. Phase 7 — D1 from the updated MVP spec:
+ * Vendor matching. Moved verbatim from src/lib/validation/vendor-match.ts.
+ *
+ * Phase 7 — D1 from the updated MVP spec:
  *
  *   normalize → exact on normalized_name OR any alias → top Jaccard candidate.
  *
@@ -9,7 +11,7 @@
  * fuzzy match resolves with reviewer confirmation, so the second
  * occurrence of any variant is a guaranteed exact match.
  */
-import { normalizeVendor } from ".";
+import { normalizeVendor } from "./engine";
 
 export interface VendorCandidate {
   id: string;

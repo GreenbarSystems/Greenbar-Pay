@@ -1,11 +1,13 @@
 /**
- * Deterministic invoice validation (PRD §"Validation Rules").
+ * Deterministic invoice validation (PRD §"Validation Rules"). Moved
+ * verbatim from src/lib/validation/index.ts.
  *
  * The validator is pure: input is the extracted invoice + line items
  * + (optional) prior-approved-invoices for duplicate check + (optional)
  * vendor candidates for matching. Output is a list of findings.
  *
- * The job (validate-extracted-invoice) wraps this with DB I/O.
+ * application/use-cases/run-invoice-validation.usecase.ts wraps this
+ * with DB I/O.
  */
 
 export type FindingSeverity = "blocking" | "warning" | "info";

@@ -17,7 +17,7 @@ import {
   CONTRACT_WARNING_OVERAGE,
   CONTRACT_BLOCKING_OVERAGE,
   type ContractLineMatch,
-} from "@/lib/validation/contract-score";
+} from "@/modules/validation/domain/contract-scoring";
 
 const LINES: ContractLineMatch[] = [
   {

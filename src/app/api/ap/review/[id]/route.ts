@@ -27,7 +27,7 @@ import { auth } from "@/lib/auth";
 import { withOrg } from "@/db/client";
 import { extractedInvoices, auditEvents } from "@/db/schema";
 import { can, loadEffectiveRole } from "@/lib/rbac";
-import { runValidationInTx } from "@/lib/validation/run";
+import { runInvoiceValidation, validationModule } from "@/modules/validation";
 import { requireUuid } from "@/lib/route-helpers";
 import { withIdempotency } from "@/lib/review/idempotencyWrap";
 import { getQueue, JOB } from "@/lib/queue";
@@ -182,7 +182,7 @@ export async function PATCH(
         }
 
         // Re-run validation against the new field values.
-        const validation = await runValidationInTx(tx, {
+        const validation = await runInvoiceValidation(tx, validationModule, {
           organizationId,
           extractedInvoiceId: params.id,
           documentId: before.documentId,

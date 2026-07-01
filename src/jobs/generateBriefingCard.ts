@@ -49,7 +49,7 @@ import {
   riskBand,
 } from "@/lib/briefing/risk-score";
 import { computeCoachingPrompts } from "@/lib/coaching/compute";
-import type { ValidationFinding } from "@/lib/validation";
+import type { ValidationFinding } from "@/modules/validation";
 import { dispatchBriefingCardGeneration } from "@/lib/llm";
 import { scrubError } from "@/lib/llm/scrub";
 import {

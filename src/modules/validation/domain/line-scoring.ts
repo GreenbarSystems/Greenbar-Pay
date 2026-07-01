@@ -1,5 +1,6 @@
 /**
- * Phase 9 — F06: line-item confidence scoring.
+ * Phase 9 — F06: line-item confidence scoring. Moved verbatim from
+ * src/lib/validation/line-score.ts.
  *
  * Per the cross-industry feature brief (Logistics / Freight Audit AI):
  * each line item is scored against the vendor's accumulated pricing
