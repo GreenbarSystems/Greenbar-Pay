@@ -36,7 +36,7 @@ import {
   type ContractExtractionResult,
 } from "@/lib/llm";
 import { scrub, scrubError } from "@/lib/llm/scrub";
-import { itemKeyword } from "@/jobs/recomputeVendorProfile";
+import { itemKeyword } from "@/modules/shared/kernel/item-keyword";
 import { resolveContractVendor } from "@/lib/contracts/resolveVendor";
 import type { JobPayloads } from "@/lib/queue";
 import { JOB } from "@/lib/queue";

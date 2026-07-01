@@ -1,9 +1,17 @@
 /**
- * Integration test for fetchVendorsPage's cursor pagination — the
- * riskiest logic in the pagination pass (raw row-value SQL comparison,
- * explicit casts, NULL handling on lastInvoiceDate). TypeScript's
- * checker can't catch a wrong NULL-ordering or a missed cast; this
- * exercises the real query against Postgres.
+ * Integration test for drizzleVendorRepository.findPage's cursor
+ * pagination — the riskiest logic in the vendors module (raw row-value
+ * SQL comparison, explicit casts, NULL handling on lastInvoiceDate,
+ * plus the per-client visibility OR/isNull composition). TypeScript's
+ * checker can't catch a wrong NULL-ordering, a missed cast, or an
+ * inverted visibility rule; this exercises the real query against
+ * Postgres.
+ *
+ * Moved from src/lib/vendors/__tests__/list-query.test.ts as part of
+ * the vendors-module extraction — same seed data and assertions, now
+ * calling the repository instead of a standalone page-query function,
+ * plus a new case covering per-client visibility (findPage previously
+ * had no test exercising the isNull/inArray OR composition at all).
  *
  * Modeled on src/db/__tests__/rls.test.ts (admin pool seeds/tears down,
  * user pool + set_config runs the RLS-scoped query under test).
@@ -13,8 +21,9 @@ import { Pool } from "pg";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { sql, eq } from "drizzle-orm";
 import * as schema from "@/db/schema";
-import { organizations, vendors } from "@/db/schema";
-import { fetchVendorsPage, type VendorsCursor } from "@/lib/vendors/list-query";
+import { clients, organizations, vendors } from "@/db/schema";
+import { drizzleVendorRepository } from "@/modules/vendors/infrastructure/drizzle-vendor.repository";
+import type { VendorsCursor } from "@/modules/vendors/application/ports";
 
 const USER_URL = process.env.DATABASE_URL!;
 const ADMIN_URL = process.env.DATABASE_URL_ADMIN!;
@@ -96,12 +105,13 @@ afterAll(async () => {
   await adminPool.end();
 });
 
-describe("fetchVendorsPage cursor pagination", () => {
+describe("drizzleVendorRepository.findPage cursor pagination", () => {
   it("orders by invoiceCount DESC, lastInvoiceDate DESC NULLS LAST, id DESC tiebreaker", async () => {
     await userDb.transaction(async (tx) => {
       await tx.execute(sql`select set_config('app.current_org_id', ${orgId}, true)`);
-      const { pageRows, hasNext } = await fetchVendorsPage(tx, {
+      const { pageRows, hasNext } = await drizzleVendorRepository.findPage(tx, {
         organizationId: orgId,
+        permittedClientIds: [],
         cursor: null,
         pageSize: 200,
       });
@@ -131,8 +141,9 @@ describe("fetchVendorsPage cursor pagination", () => {
         if (iterations > SEED.length + 1) {
           throw new Error("pagination did not terminate — possible infinite loop");
         }
-        const page = await fetchVendorsPage(tx, {
+        const page = await drizzleVendorRepository.findPage(tx, {
           organizationId: orgId,
+          permittedClientIds: [],
           cursor,
           pageSize: 2,
         });
@@ -159,16 +170,49 @@ describe("fetchVendorsPage cursor pagination", () => {
     });
   });
 
-  it("respects clientFilter alongside the cursor", async () => {
+  it("permittedClientIds scopes visibility: null = no restriction, [] = unaffiliated only, [id] = unaffiliated + that client", async () => {
+    const [client] = await adminDb
+      .insert(clients)
+      .values({ organizationId: orgId, name: "Scoped Client", slug: `scoped-client-${Date.now()}` })
+      .returning({ id: clients.id });
+
+    await adminDb.insert(vendors).values({
+      organizationId: orgId,
+      clientId: client.id,
+      name: "Scoped Vendor",
+      normalizedName: "scoped vendor",
+      invoiceCount: 7,
+    });
+
     await userDb.transaction(async (tx) => {
       await tx.execute(sql`select set_config('app.current_org_id', ${orgId}, true)`);
-      const { pageRows } = await fetchVendorsPage(tx, {
+
+      const restricted = await drizzleVendorRepository.findPage(tx, {
         organizationId: orgId,
+        permittedClientIds: [],
         cursor: null,
         pageSize: 200,
-        clientFilter: eq(vendors.name, "Acme Corp"),
       });
-      expect(pageRows.map((r) => r.name)).toEqual(["Acme Corp"]);
+      expect(restricted.pageRows.some((r) => r.name === "Scoped Vendor")).toBe(false);
+      expect(restricted.pageRows).toHaveLength(SEED.length);
+
+      const grantedForClient = await drizzleVendorRepository.findPage(tx, {
+        organizationId: orgId,
+        permittedClientIds: [client.id],
+        cursor: null,
+        pageSize: 200,
+      });
+      expect(grantedForClient.pageRows.some((r) => r.name === "Scoped Vendor")).toBe(true);
+      expect(grantedForClient.pageRows).toHaveLength(SEED.length + 1);
+
+      const unrestricted = await drizzleVendorRepository.findPage(tx, {
+        organizationId: orgId,
+        permittedClientIds: null,
+        cursor: null,
+        pageSize: 200,
+      });
+      expect(unrestricted.pageRows.some((r) => r.name === "Scoped Vendor")).toBe(true);
+      expect(unrestricted.pageRows).toHaveLength(SEED.length + 1);
     });
   });
 });

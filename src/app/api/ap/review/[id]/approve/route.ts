@@ -45,7 +45,7 @@ import {
   pickFields,
   INVOICE_HEADER_FIELDS,
 } from "@/lib/route-helpers";
-import { bootstrapVendorOnApprove } from "@/lib/vendors/bootstrap";
+import { bootstrapVendorOnApprove, vendorsModule } from "@/modules/vendors";
 import { getQueue, JOB } from "@/lib/queue";
 import { scrubError } from "@/lib/llm/scrub";
 
@@ -295,7 +295,7 @@ export async function POST(
         // Phase 7 — D1: auto-bootstrap the vendor master + promote any
         // fuzzy-matched alias. Done inside the same tx so the audit row
         // can record the resolved vendor_id.
-        const bootstrap = await bootstrapVendorOnApprove(tx, {
+        const bootstrap = await bootstrapVendorOnApprove(tx, vendorsModule, {
           organizationId,
           clientId: before.clientId,
           extractedInvoiceId: params.id,

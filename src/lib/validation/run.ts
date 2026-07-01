@@ -41,7 +41,7 @@ import {
   scoreLineAgainstContract,
   type ContractLineMatch,
 } from "./contract-score";
-import { itemKeyword } from "@/jobs/recomputeVendorProfile";
+import { itemKeyword } from "@/modules/shared/kernel/item-keyword";
 
 export interface RunValidationResult {
   findings: ValidationFinding[];

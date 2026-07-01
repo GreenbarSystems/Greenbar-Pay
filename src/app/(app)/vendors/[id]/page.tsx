@@ -9,19 +9,9 @@ import { notFound } from "next/navigation";
 import { auth } from "@/lib/auth";
 import { can } from "@/lib/rbac";
 import { withOrg } from "@/db/client";
-import {
-  vendors,
-  vendorPricingHistory,
-  auditEvents,
-  extractedInvoices,
-  documents,
-  vendorContracts,
-  vendorContractLines,
-} from "@/db/schema";
 import ContractsSection from "./ContractsSection";
-import { and, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { requireUuid } from "@/lib/route-helpers";
-import { loadPermittedClientIds } from "@/lib/rbac/client-scope";
+import { getVendorDetail, isVendorProfileReady, vendorsModule } from "@/modules/vendors";
 
 export default async function VendorDetailPage({
   params,
@@ -42,157 +32,15 @@ export default async function VendorDetailPage({
   // across data load + UI affordances.
   const canManageContracts = can(role, "invoice.override");
 
-  const data = await withOrg(organizationId, async (tx) => {
-    const [vendor] = await tx
-      .select()
-      .from(vendors)
-      .where(
-        and(
-          eq(vendors.id, params.id),
-          eq(vendors.organizationId, organizationId),
-        ),
-      )
-      .limit(1);
-    if (!vendor) return null;
-
-    // PR6 — review #5: per-client read scope. If the user can't see
-    // this vendor's client, return null → notFound() falls through.
-    // 404 is intentional — leaks no signal about whether the vendor
-    // exists in a client the user can't see.
-    const permitted = await loadPermittedClientIds(tx, { userId, orgRole: role });
-    if (permitted !== null && vendor.clientId !== null) {
-      if (!permitted.includes(vendor.clientId)) return null;
-    }
-
-    // PR8 — review perf #4: fan out the independent loads. Pricing,
-    // recent invoices, profile events, and (Phase 9.5 PR4) contracts
-    // have no dependency between them once vendor is resolved.
-    const [pricing, recentApprovedInvoices, profileEvents, contracts] =
-      await Promise.all([
-      // PR6: pricing history is append-only — display only the active rows.
-      tx
-        .select()
-        .from(vendorPricingHistory)
-        .where(
-          and(
-            eq(vendorPricingHistory.vendorId, vendor.id),
-            isNull(vendorPricingHistory.supersededAt),
-          ),
-        )
-        .orderBy(desc(vendorPricingHistory.samples))
-        .limit(20),
-      tx
-        .select({
-          id: extractedInvoices.id,
-          invoiceNumber: extractedInvoices.invoiceNumber,
-          invoiceDate: extractedInvoices.invoiceDate,
-          total: extractedInvoices.total,
-          reviewStatus: extractedInvoices.reviewStatus,
-          documentId: extractedInvoices.documentId,
-        })
-        .from(extractedInvoices)
-        .innerJoin(documents, eq(documents.id, extractedInvoices.documentId))
-        .where(
-          and(
-            eq(extractedInvoices.organizationId, organizationId),
-            inArray(extractedInvoices.reviewStatus, ["approved", "exported"]),
-            // PR20 — match via normalize_vendor_text so the functional
-            // index idx_ei_org_norm_vendor_name (PR8) is used. Previous
-            // raw eq(vendorName, vendor.name) was case-sensitive AND
-            // unindexed; both bugs.
-            sql`normalize_vendor_text(${extractedInvoices.vendorName}) = ${vendor.normalizedName}`,
-          ),
-        )
-        .orderBy(desc(extractedInvoices.invoiceDate))
-        .limit(10),
-      tx
-        .select({
-          id: auditEvents.id,
-          action: auditEvents.action,
-          createdAt: auditEvents.createdAt,
-          metadataJson: auditEvents.metadataJson,
-        })
-        .from(auditEvents)
-        .where(
-          and(
-            eq(auditEvents.entityType, "vendor"),
-            eq(auditEvents.entityId, vendor.id),
-          ),
-        )
-        .orderBy(desc(auditEvents.createdAt))
-        .limit(10),
-      // Phase 9.5 PR4 — every contract for this vendor (any status).
-      // Explicit projection keeps the wire shape narrow and stable —
-      // dropping unstable internal fields (llm_run_id, warnings_json).
-      // The active contract's rate-card lines are fetched after this
-      // in a single dependent query so the UI can show it expanded.
-      tx
-        .select({
-          id: vendorContracts.id,
-          status: vendorContracts.status,
-          contractNumber: vendorContracts.contractNumber,
-          effectiveDate: vendorContracts.effectiveDate,
-          expiryDate: vendorContracts.expiryDate,
-          paymentTerms: vendorContracts.paymentTerms,
-          currency: vendorContracts.currency,
-          confidence: vendorContracts.confidence,
-          earlyPaymentDiscountPct: vendorContracts.earlyPaymentDiscountPct,
-          earlyPaymentDiscountDays: vendorContracts.earlyPaymentDiscountDays,
-          documentId: vendorContracts.documentId,
-          createdAt: vendorContracts.createdAt,
-          supersededAt: vendorContracts.supersededAt,
-        })
-        .from(vendorContracts)
-        .where(
-          and(
-            eq(vendorContracts.organizationId, organizationId),
-            eq(vendorContracts.vendorId, vendor.id),
-          ),
-        )
-        .orderBy(desc(vendorContracts.createdAt))
-        .limit(20),
-    ]);
-
-    // Phase 9.5 PR4 — pull rate-card lines for the active contract
-    // only. Extracted-but-not-active contracts get a line count
-    // surfaced via the list UI; their full lines are out of scope
-    // for the first cut (a "show details" expander can fetch them
-    // in a follow-up).
-    //
-    // PR21 H1 — only fetch when the caller has invoice.override. The
-    // unit_price + notes columns are negotiated commercial terms; the
-    // prior shape rendered them in the RSC payload for every viewer,
-    // bookkeeper, and reviewer that reached /vendors/[id]. Same gate
-    // pattern as the pricing-history section (PR20).
-    const activeContract = contracts.find((c) => c.status === "active");
-    const activeContractLines =
-      activeContract && canManageContracts
-        ? await tx
-            .select({
-              id: vendorContractLines.id,
-              description: vendorContractLines.description,
-              itemKeyword: vendorContractLines.itemKeyword,
-              unitPrice: vendorContractLines.unitPrice,
-              currency: vendorContractLines.currency,
-              priceBasis: vendorContractLines.priceBasis,
-              minQuantity: vendorContractLines.minQuantity,
-              maxQuantity: vendorContractLines.maxQuantity,
-              notes: vendorContractLines.notes,
-            })
-            .from(vendorContractLines)
-            .where(eq(vendorContractLines.contractId, activeContract.id))
-            .orderBy(vendorContractLines.description)
-        : [];
-
-    return {
-      vendor,
-      pricing,
-      recentApprovedInvoices,
-      profileEvents,
-      contracts,
-      activeContractLines,
-    };
-  });
+  const data = await withOrg(organizationId, (tx) =>
+    getVendorDetail(tx, vendorsModule, {
+      organizationId,
+      userId,
+      orgRole: role,
+      vendorId: params.id,
+      canManageContracts,
+    }),
+  );
 
   if (!data) notFound();
   const {
@@ -203,7 +51,7 @@ export default async function VendorDetailPage({
     contracts,
     activeContractLines,
   } = data;
-  const ready = vendor.invoiceCount >= 3;
+  const ready = isVendorProfileReady(vendor.invoiceCount);
 
   return (
     <div className="space-y-6">

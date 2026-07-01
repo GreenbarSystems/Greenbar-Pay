@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { itemKeyword } from "@/jobs/recomputeVendorProfile";
+import { itemKeyword } from "@/modules/shared/kernel/item-keyword";
 
 describe("itemKeyword", () => {
   it("returns null on empty / nullish input", () => {

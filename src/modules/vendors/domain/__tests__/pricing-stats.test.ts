@@ -1,8 +1,8 @@
 /**
- * Phase 9 — per-keyword stats compute used by recomputeVendorProfile.
+ * Phase 9 — per-keyword stats compute used by recompute-vendor-profile.
  */
 import { describe, it, expect } from "vitest";
-import { computeKeywordStats } from "@/jobs/recomputeVendorProfile";
+import { computeKeywordStats } from "@/modules/vendors/domain/pricing-stats";
 
 function d(iso: string): Date {
   return new Date(`${iso}T00:00:00Z`);

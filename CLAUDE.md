@@ -53,6 +53,58 @@ multi-client work if a CPA-firm customer materializes. Ripping out the
 schema would force a destructive migration that is hard to reverse.
 Gating preserves optionality at near-zero ongoing cost.
 
+## Modules — Clean Architecture layering (in progress, started with `vendors`)
+
+`src/modules/<context>/` is where business logic is migrating to, one
+bounded context at a time. `src/modules/vendors/` is the first (and so
+far only) context fully moved — treat it as the template for the next
+one, not a one-off.
+
+Each module has three layers, dependency direction pointing inward:
+
+- **`domain/`** — pure functions and types. No Drizzle, no `Tx`, no I/O.
+  Business rules that used to be buried inside a route handler or job
+  body (e.g. `isVendorProfileReady`, `aggregateVendorProfile`) live
+  here so they're unit-testable without a database.
+- **`application/`** — orchestration. `ports.ts` declares the
+  repository interfaces the use cases depend on (Dependency Inversion:
+  application code never imports `@/db/schema` or `drizzle-orm`
+  directly). `use-cases/*.usecase.ts` are the only functions
+  presentation code and jobs call into — each takes the existing `Tx`
+  from `withOrg`/`withOrgAsWorker` as its first argument plus a `deps`
+  object of repository implementations.
+- **`infrastructure/`** — the only place that imports `@/db/schema` and
+  builds Drizzle queries for this module. Implements the ports from
+  `application/ports.ts`. This is where every query that used to live
+  inline in a page/route/job now lives, unchanged in SQL shape.
+
+A module's `index.ts` barrel is the ONLY import path allowed from
+outside — never reach into `src/modules/<context>/{domain,
+application,infrastructure}/*` directly from a page, route, or job.
+That keeps the dependency graph one-way instead of every layer knowing
+about every other layer's internals.
+
+**This does not replace `withOrg`.** Every repository method still
+takes a `Tx`; the tenant-isolation transaction boundary from the rule
+below is unchanged — this refactor only separates *what happens inside*
+that boundary into named, individually testable pieces.
+
+**Shared kernel**: `src/modules/shared/kernel/` holds the rare pure
+function that multiple bounded contexts must agree on bit-for-bit
+(currently just `item-keyword.ts` — vendor pricing, contract line
+matching, and invoice rate-drift scoring all group line items by the
+same stemmed keyword). Don't reach for this casually; most logic
+belongs inside one module, not shared.
+
+**Migrating the next context**: pick a bounded context still living in
+`src/lib/`/`src/jobs`/inline in `src/app/`, move its pure logic to
+`domain/`, define `ports.ts` for its DB access, move the existing
+Drizzle queries into `infrastructure/` verbatim (same SQL, just named
+and interfaced), then write `use-cases/` that call the ports. The point
+of doing this incrementally is that each module migrates with zero
+behavior change and its own test coverage — don't attempt a repo-wide
+move in one pass.
+
 ## Other agent guidance
 
 - **No direct ORM access outside `withOrg`** — enforced by ESLint.

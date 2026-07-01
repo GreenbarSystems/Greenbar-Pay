@@ -11,13 +11,13 @@
 import Link from "next/link";
 import { auth } from "@/lib/auth";
 import { withOrg } from "@/db/client";
-import { vendors } from "@/db/schema";
-import { inArray, isNull, or } from "drizzle-orm";
-import { loadPermittedClientIds } from "@/lib/rbac/client-scope";
 import { decodeCursor, encodeCursor } from "@/lib/pagination";
-import { fetchVendorsPage, type VendorsCursor } from "@/lib/vendors/list-query";
-
-const PROFILE_READY_THRESHOLD = 3;
+import {
+  getVendorList,
+  isVendorProfileReady,
+  vendorsModule,
+  type VendorsCursor,
+} from "@/modules/vendors";
 
 export default async function VendorsListPage({
   searchParams,
@@ -30,24 +30,14 @@ export default async function VendorsListPage({
 
   const cursor = decodeCursor<VendorsCursor>(searchParams.cursor);
 
-  const { pageRows: rows, hasNext } = await withOrg(organizationId, async (tx) => {
-    // PR6 — review #5: per-client read scope. clerk/viewer users with
-    // explicit per-client grants must NOT see other clients' vendor
-    // financial profiles. reviewer/admin/owner get org-wide.
-    const permitted = await loadPermittedClientIds(tx, { userId, orgRole: role });
-    const clientFilter =
-      permitted === null
-        ? undefined
-        : permitted.length === 0
-          ? // No grants at all → only unaffiliated vendors.
-            isNull(vendors.clientId)
-          : or(
-              isNull(vendors.clientId),
-              inArray(vendors.clientId, permitted),
-            );
-
-    return fetchVendorsPage(tx, { organizationId, clientFilter, cursor });
-  });
+  const { pageRows: rows, hasNext } = await withOrg(organizationId, (tx) =>
+    getVendorList(tx, vendorsModule, {
+      organizationId,
+      userId,
+      orgRole: role,
+      cursor,
+    }),
+  );
 
   return (
     <div>
@@ -73,7 +63,7 @@ export default async function VendorsListPage({
             </thead>
             <tbody className="divide-y divide-gray-100">
               {rows.map((r) => {
-                const ready = r.invoiceCount >= PROFILE_READY_THRESHOLD;
+                const ready = isVendorProfileReady(r.invoiceCount);
                 return (
                   <tr key={r.id}>
                     <td className="px-4 py-2">
