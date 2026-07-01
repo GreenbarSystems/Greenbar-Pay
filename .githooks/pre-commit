@@ -50,3 +50,31 @@ if ! npm run --silent db:migrate:check; then
 EOF
   exit 1
 fi
+
+# Extra regression test for anything that could reintroduce the 0030
+# partition-backfill bug (DEFAULT partitions don't auto-migrate rows —
+# see CLAUDE.md). db:migrate:check above only proves migrations apply
+# to an EMPTY database, which is exactly what let that bug through
+# undetected. Scoped to the specific files this test actually depends
+# on, since it's slower than db:migrate:check (seeds real data on top
+# of a partial migration run).
+partition_test_relevant=$(git diff --cached --name-only --diff-filter=ACMR -- \
+  'src/db/migrations/sidecar/0030_partition_audit_events.sql' \
+  'src/db/migrate.ts' \
+  'scripts/verify-partition-backfill.ts' || true)
+
+if [[ -n "$partition_test_relevant" ]]; then
+  echo "[pre-commit] 0030-relevant files changed; running db:verify-partition-backfill"
+  echo "$partition_test_relevant" | sed 's/^/[pre-commit]   /'
+  if ! npm run --silent db:verify-partition-backfill; then
+    cat <<EOF
+
+[pre-commit] db:verify-partition-backfill failed. This means 0030 (or
+[pre-commit] shared migration logic in src/db/migrate.ts) no longer
+[pre-commit] correctly backfills pre-existing historical data. Fix it,
+[pre-commit] then re-stage and re-commit. To bypass intentionally:
+[pre-commit]   SKIP_MIGRATE_CHECK=1 git commit ...
+EOF
+    exit 1
+  fi
+fi
