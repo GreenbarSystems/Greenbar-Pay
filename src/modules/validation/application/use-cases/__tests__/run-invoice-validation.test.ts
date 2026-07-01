@@ -16,6 +16,7 @@ import { drizzle } from "drizzle-orm/node-postgres";
 import { sql, eq } from "drizzle-orm";
 import * as schema from "@/db/schema";
 import {
+  auditEvents,
   documents,
   extractedInvoiceLines,
   extractedInvoices,
@@ -82,6 +83,11 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
+  // audit_events.organization_id is RESTRICT (append-only audit trail
+  // must not silently vanish when an org is deleted — see
+  // src/db/schema/auditEvents.ts) — unlike every other tenant table
+  // here, it does NOT cascade, so it must be cleared explicitly first.
+  await adminDb.delete(auditEvents).where(eq(auditEvents.organizationId, orgId));
   await adminDb.delete(organizations).where(eq(organizations.id, orgId));
   await userPool.end();
   await adminPool.end();
