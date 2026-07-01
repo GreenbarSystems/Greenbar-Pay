@@ -155,4 +155,56 @@ for ad-hoc partial replays.
 If you find yourself wanting to backfill 0001–0005 to use the helper,
 that's a fine cleanup — make sure 0021 still runs idempotently after.
 
+### `email_messages` RLS lands in 0006, not 0001 — on purpose
+
+Every other tenant-scoped table gets its RLS policy in
+`0001_rls.sql` with a uniform `organization_id = current_org` USING
+clause. `email_messages` / `email_attachments` are the deliberate
+exception, added in `0006_rls_phase6.sql` instead. This isn't staged
+migration debt — `organization_id` on `email_messages` is nullable by
+design: a newly-arrived message with an unroutable recipient address
+has no tenant yet and sits in an admin queue with `status='unrouted'`
+until someone resolves it. The policy's `WITH CHECK` clause explicitly
+allows `organization_id IS NULL` so that queue stays visible to admin
+tooling while tenant users still only ever see their own org's rows.
+If you touch RLS on these two tables, preserve that NULL-org carve-out
+— collapsing it into the uniform 0001 pattern would hide the unrouted
+queue from the tooling that's supposed to triage it.
+
+### REST routes vs. Server Actions
+
+Every invoice mutation (upload, PATCH, approve, reject, export) is a
+REST route under `src/app/api/`. The one exception is sign-out
+(`src/app/(app)/layout.tsx`), which uses a Next.js Server Action
+(`"use server"` inline in a form action). This is a deliberate split,
+not drift:
+
+- **REST routes** for anything that needs `Idempotency-Key` /
+  `If-Match` semantics, structured JSON error bodies a client-side
+  handler can branch on, or that a future non-browser caller (a CLI,
+  a partner integration) might need to hit directly. All of addendum
+  §4's idempotency patterns are written against fetch/Response
+  semantics, not Server Action call/return semantics.
+- **Server Actions** for simple, session-scoped, browser-only actions
+  with no idempotency requirement and no external caller — sign-out
+  is the only one so far.
+
+When adding a new mutation, default to a REST route unless it's
+clearly sign-out-shaped (no retry concerns, no external caller, no
+structured error handling needed client-side).
+
+### UUID v4 primary keys (not v7)
+
+All tables use Drizzle's default `uuid().primaryKey().defaultRandom()`
+(UUID v4 — fully random). UUID v7 is time-ordered and gives better
+B-tree index locality for high-insert tables at very large scale.
+This hasn't been a bottleneck yet and isn't planned — noting it here
+only so it isn't rediscovered as a "should we fix this" question
+without context. If per-table insert volume ever makes index bloat a
+measured problem (not a theoretical one), v7 is the natural next step
+for new rows; a backfill of existing v4 keys is a separate, much
+larger decision (every FK reference would need to stay stable, so it
+would likely mean generating v7 only for NEW rows going forward, not
+rewriting history).
+
 See `README.md` for full stack, conventions, and local-dev instructions.
