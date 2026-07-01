@@ -67,6 +67,9 @@ export const JOB = {
   // Hygiene — runs on a cron schedule (boss.schedule in scripts/worker.ts).
   // Deletes api_idempotency_keys rows past their 24h TTL.
   cleanupIdempotencyKeys: "cleanup-idempotency-keys",
+  // Hygiene — runs on a cron schedule. Keeps audit_events' RANGE
+  // partitions (migration 0030) created ahead of the calendar.
+  ensureAuditEventPartitions: "ensure-audit-event-partitions",
 } as const;
 
 export type JobPayloads = {
@@ -98,4 +101,6 @@ export type JobPayloads = {
   };
   // Hygiene job — no payload; cross-tenant cleanup.
   [JOB.cleanupIdempotencyKeys]: Record<string, never>;
+  // Hygiene job — no payload; cross-tenant DDL maintenance.
+  [JOB.ensureAuditEventPartitions]: Record<string, never>;
 };

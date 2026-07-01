@@ -18,6 +18,12 @@ import { scrubError } from "@/lib/llm/scrub";
 const IDEMPOTENCY_CLEANUP_CRON =
   process.env.IDEMPOTENCY_CLEANUP_CRON ?? "17 * * * *";
 
+// Partitions only need to exist a month ahead; daily is a cheap, safe
+// margin. Off-peak time, different offset than the idempotency job so
+// the two don't compete for the same tick.
+const AUDIT_PARTITION_CRON =
+  process.env.AUDIT_PARTITION_CRON ?? "37 3 * * *";
+
 async function main() {
   const boss = await getQueue();
   console.log(`[worker] connected; registering ${HANDLERS.length} handlers`);
@@ -61,6 +67,13 @@ async function main() {
   });
   console.log(
     `[worker] scheduled ${JOB.cleanupIdempotencyKeys} at "${IDEMPOTENCY_CLEANUP_CRON}" UTC`,
+  );
+
+  await boss.schedule(JOB.ensureAuditEventPartitions, AUDIT_PARTITION_CRON, {}, {
+    tz: "UTC",
+  });
+  console.log(
+    `[worker] scheduled ${JOB.ensureAuditEventPartitions} at "${AUDIT_PARTITION_CRON}" UTC`,
   );
 
   // AP inbox SQS poller runs alongside pg-boss handlers in the same

@@ -155,6 +155,87 @@ for ad-hoc partial replays.
 If you find yourself wanting to backfill 0001–0005 to use the helper,
 that's a fine cleanup — make sure 0021 still runs idempotently after.
 
+### `audit_events` is RANGE-partitioned by `created_at` (monthly)
+
+Migration `0030_partition_audit_events.sql` replaced the plain table
+with a native Postgres RANGE partition set, monthly boundaries, to
+keep queries and vacuum cheap as the append-only audit trail grows
+without bound (7-year retention, no DELETE possible — the append-only
+RULES block it).
+
+- **Composite PRIMARY KEY `(id, created_at)`**, not just `id`.
+  Required — Postgres partition keys must be part of any PK on a
+  partitioned table. `id` stays a random UUID
+  (`gen_random_uuid()`); practical uniqueness is unaffected. No code
+  does a single-column `eq(auditEvents.id, x)` write (the RULES block
+  UPDATE/DELETE outright); the one read usage is a SELECT projection.
+- **A `DEFAULT` partition** (`audit_events_default`) catches all
+  pre-migration historical rows and anything that ever falls outside
+  the explicitly-created monthly ranges — the safety net if the
+  partition-maintenance job below ever falls behind.
+- **`create_audit_events_partition(month_start date)`** is a reusable
+  SQL function (defined at the end of 0030) that creates one month's
+  partition, idempotently, with RLS + policy + grants matching the
+  parent. Both the initial migration and the scheduled job below call
+  it.
+- **`ensureAuditEventPartitions` job**
+  (`src/jobs/ensureAuditEventPartitions.ts`) runs daily, calling
+  `create_audit_events_partition()` for the current month + a 2-month
+  buffer. If this job ever stops running (worker down for months),
+  new audit rows keep working correctly — they just land in the
+  DEFAULT partition until the job catches up and a subsequent
+  partition creation migrates matching rows out automatically
+  (standard Postgres behavior for `PARTITION OF ... DEFAULT`).
+- **RLS is enabled on every partition individually**, not just the
+  parent. Enforcement via the parent alone is sufficient for all real
+  traffic (nothing in this codebase ever names a partition directly),
+  but per-partition RLS is cheap defense-in-depth against a
+  hypothetical direct-partition-name query bypassing the parent.
+- **The old (pre-partition) table is renamed to
+  `audit_events_pre_partition_backup`, not dropped.** Verify the new
+  partitioned table looks correct before dropping the backup in a
+  follow-up migration — this wasn't tested against a real populated
+  database (no local Postgres was available when it was written; CI's
+  fresh-empty-DB run only validates the zero-rows path). If you're
+  running this migration against an environment with meaningful
+  existing `audit_events` data, take a `pg_dump` of that table first
+  as an extra safety net beyond the in-SQL rename.
+
+### drizzle-kit's generated-migration track had drifted (partially fixed)
+
+`extraction_corrections`, `llm_circuit_state`, `verification_tokens`,
+and the `llm_run_status` enum widening were all added to `schema.ts`
+and applied via hand-written sidecar SQL across several sessions, but
+`drizzle-kit`'s own snapshot (`meta/*_snapshot.json`) was never
+regenerated to match. Running `npm run db:generate` for the
+`audit_events` PK change surfaced all of that at once as one large
+migration — including duplicate `CREATE TABLE` statements for tables
+the sidecars already created, in some cases with a **weaker** shape
+(its version of `idx_extraction_corrections_vendor` is missing the
+sidecar's `WHERE vendor_id IS NOT NULL` partial clause). Committing
+that blindly would have let the generated version win the
+`CREATE TABLE IF NOT EXISTS` race on a fresh database, silently
+downgrading indexes that already work correctly today.
+
+What actually shipped in `0002_flowery_golden_guardian.sql`: the
+snapshot/journal update (so `db:generate` is a true no-op again — a
+follow-up `db:generate` run confirmed "No schema changes, nothing to
+migrate"), but the `.sql` file's contents were hand-trimmed to **only**
+the `audit_events` PK fix, guarded with existence checks so it's a
+safe no-op whether the old single-column PK is still there, already
+composite, or the table has already been replaced by 0030's
+partitioned version.
+
+**Still open**: reconciling `extraction_corrections` /
+`llm_circuit_state` / `verification_tokens` / the enum value against
+what drizzle-kit would generate for them is a separate, dedicated
+cleanup — not attempted here. The sidecar-created versions of those
+objects are correct and already running in every environment; nothing
+is broken today. But the underlying trap (letting `schema.ts` drift
+ahead of hand-authored sidecar SQL without ever running `db:generate`
+to check) is exactly what caused this, and will recur for the next
+schema change unless addressed.
+
 ### `email_messages` RLS lands in 0006, not 0001 — on purpose
 
 Every other tenant-scoped table gets its RLS policy in
