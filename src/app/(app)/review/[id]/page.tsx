@@ -306,14 +306,43 @@ export default async function ReviewDetailPage({
           ? {
               glCode: data.briefingCard.glCode,
               glRationale: data.briefingCard.glRationale,
+              // Explicit projection (same fix pattern as PR16 H1 below
+              // for coaching_prompts_json). The prior code only had a
+              // TS `as` cast, which narrows the compile-time type but
+              // does nothing at runtime — Drizzle returns the raw
+              // JSONB blob, so any unexpected field the LLM tool-use
+              // decoder or a legacy row happened to carry would still
+              // serialize into the RSC payload verbatim. The
+              // AnomalyFlag schema (src/lib/llm/briefing-card-schema.ts)
+              // is intentionally open-ended in its evidenceChain labels,
+              // so a future model response drifting outside {code,
+              // severity, message, evidenceChain} should not translate
+              // into a wire leak. ReviewDetailClient only ever reads
+              // those four fields (plus evidenceChain[].{label,detail}).
               anomalyFlags: Array.isArray(data.briefingCard.anomalyFlagsJson)
-                ? (data.briefingCard.anomalyFlagsJson as Array<{
-                    code: string;
-                    severity: "info" | "warning" | "critical";
-                    message: string;
-                    // Phase 9 — F07: optional reasoning chain.
-                    evidenceChain?: Array<{ label: string; detail: string }>;
-                  }>)
+                ? (
+                    data.briefingCard.anomalyFlagsJson as Array<{
+                      code?: unknown;
+                      severity?: unknown;
+                      message?: unknown;
+                      evidenceChain?: unknown;
+                    }>
+                  ).map((f) => ({
+                    code: String(f.code ?? ""),
+                    severity: (
+                      f.severity === "warning" || f.severity === "critical"
+                        ? f.severity
+                        : "info"
+                    ) as "info" | "warning" | "critical",
+                    message: String(f.message ?? ""),
+                    evidenceChain: Array.isArray(f.evidenceChain)
+                      ? (f.evidenceChain as Array<{ label?: unknown; detail?: unknown }>)
+                          .map((step) => ({
+                            label: String(step.label ?? ""),
+                            detail: String(step.detail ?? ""),
+                          }))
+                      : undefined,
+                  }))
                 : [],
               deltaSummary: data.briefingCard.deltaSummary,
               riskScore: data.briefingCard.riskScore,
