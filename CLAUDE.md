@@ -53,12 +53,23 @@ multi-client work if a CPA-firm customer materializes. Ripping out the
 schema would force a destructive migration that is hard to reverse.
 Gating preserves optionality at near-zero ongoing cost.
 
-## Modules — Clean Architecture layering (in progress, started with `vendors`)
+## Modules — Clean Architecture layering (in progress: `vendors`, `validation` done)
 
 `src/modules/<context>/` is where business logic is migrating to, one
-bounded context at a time. `src/modules/vendors/` is the first (and so
-far only) context fully moved — treat it as the template for the next
-one, not a one-off.
+bounded context at a time. `src/modules/vendors/` and
+`src/modules/validation/` are fully moved — treat them as the template
+for the next one, not a one-off.
+
+Note from the `validation` migration: a bounded context can need its
+own read-model against tables another module also owns (`validation`
+queries `vendors`/`vendor_pricing_history`/`vendor_contracts` — the
+same tables `vendors`' infrastructure reads). Each module still defines
+and implements its own port for that — never import one module's
+`infrastructure/*` from another module. The query *shapes* differ
+enough (validation needs pricing-stats-by-keyword and an
+active-contract-with-rate-card-hash; vendors needs list/detail
+projections) that sharing a repository would leak one module's
+incidental needs into the other's contract.
 
 Each module has three layers, dependency direction pointing inward:
 

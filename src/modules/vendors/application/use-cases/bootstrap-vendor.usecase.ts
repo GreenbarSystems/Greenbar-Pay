@@ -18,7 +18,7 @@
  *   - no match: create a new vendor row. The recompute-vendor-profile
  *     use case populates stats on the first run.
  */
-import { normalizeVendor } from "@/lib/validation";
+import { normalizeVendor } from "@/modules/validation";
 import type { Tx } from "@/db/client";
 import { MAX_VENDOR_ALIASES } from "../../domain/vendor";
 import type { VendorAuditRepository, VendorRepository } from "../ports";

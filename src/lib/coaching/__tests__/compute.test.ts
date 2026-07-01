@@ -9,7 +9,7 @@
  */
 import { describe, it, expect } from "vitest";
 import { computeCoachingPrompts } from "@/lib/coaching/compute";
-import type { ValidationFinding } from "@/lib/validation";
+import type { ValidationFinding } from "@/modules/validation";
 
 // Typecheck-sweep — explicit field types let individual tests override
 // with number | null and string | null without the literal-narrowing

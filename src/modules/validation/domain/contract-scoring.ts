@@ -1,5 +1,6 @@
 /**
- * Phase 9.5 PR3 — contract-grounded line scoring.
+ * Phase 9.5 PR3 — contract-grounded line scoring. Moved verbatim from
+ * src/lib/validation/contract-score.ts.
  *
  * Pure function: given an invoice line and the matched vendor's active
  * contract lines, compute whether the line's unit_price is within or
@@ -16,7 +17,7 @@
  * auditor can see that the validation rule DID fire and matched the
  * contract — a clean run still records a positive lineage entry.
  */
-import type { ValidationFinding } from "./index";
+import type { ValidationFinding } from "./engine";
 
 export const CONTRACT_WARNING_OVERAGE = 0.1;
 export const CONTRACT_BLOCKING_OVERAGE = 0.25;
