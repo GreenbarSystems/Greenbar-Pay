@@ -33,6 +33,21 @@ jobs:
         with:
           node-version: "20"
       - run: npm install --no-audit --no-fund
+      # postinstall (scripts/copy-pdf-worker.mjs) just regenerated
+      # public/pdf.worker.min.mjs from the pdfjs-dist version this
+      # install resolved. If that differs from what's committed, a
+      # dev bumped pdfjs-dist (or react-pdf) and forgot to `git add`
+      # the regenerated worker file -- the production Docker build's
+      # `COPY . .` step ships the STALE committed copy, which then
+      # mismatches the pdfjs-dist actually bundled in node_modules.
+      # Catch it here instead of as a silent PDF-preview failure in
+      # production.
+      - name: Verify pdf.worker.min.mjs matches installed pdfjs-dist
+        run: |
+          if ! git diff --exit-code -- public/pdf.worker.min.mjs; then
+            echo "::error::public/pdf.worker.min.mjs is out of sync with the installed pdfjs-dist version. Run 'npm install' locally and commit the regenerated file."
+            exit 1
+          fi
       - run: npm run lint
       - run: npm run typecheck
       - run: npm run typecheck:worker  # asserts worker compiles without src/app

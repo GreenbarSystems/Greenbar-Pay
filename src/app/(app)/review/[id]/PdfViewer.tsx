@@ -30,7 +30,9 @@ import "react-pdf/dist/Page/AnnotationLayer.css";
 
 // PDF.js worker. Served from /public — must stay in lockstep with the
 // pdfjs-dist version in package.json. The post-install hook re-copies
-// it on every npm install.
+// it on every npm install; CI verifies the committed copy matches
+// (see scripts/copy-pdf-worker.mjs for the version-drift rationale
+// and why we use a diff check here instead of Subresource Integrity).
 pdfjs.GlobalWorkerOptions.workerSrc = "/pdf.worker.min.mjs";
 
 const ZOOM_LEVELS = [0.5, 0.75, 1, 1.25, 1.5, 2] as const;
