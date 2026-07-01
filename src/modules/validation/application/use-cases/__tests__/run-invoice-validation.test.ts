@@ -52,7 +52,7 @@ let userDb: ReturnType<typeof drizzle<typeof schema>>;
 let adminDb: ReturnType<typeof drizzle<typeof schema>>;
 let orgId: string;
 let vendorId: string;
-let documentId: string;
+let seedCounter = 0;
 
 beforeAll(async () => {
   if (!USER_URL || !ADMIN_URL) {
@@ -79,17 +79,6 @@ beforeAll(async () => {
     .returning({ id: vendors.id });
   vendorId = vendor.id;
 
-  const [doc] = await adminDb
-    .insert(documents)
-    .values({
-      organizationId: orgId,
-      source: "upload",
-      originalFilename: "invoice.pdf",
-      storageKey: `documents/${orgId}/invoice.pdf`,
-      contentHash: `hash-${Date.now()}`,
-    })
-    .returning({ id: documents.id });
-  documentId = doc.id;
 });
 
 afterAll(async () => {
@@ -98,15 +87,32 @@ afterAll(async () => {
   await adminPool.end();
 });
 
+/**
+ * extracted_invoices has a partial unique index (uniq_extracted_invoices_active)
+ * allowing at most one active (pending/needs_review) row per document —
+ * every seeded invoice needs its OWN document, not a shared one.
+ */
 async function seedInvoice(overrides: Partial<typeof extractedInvoices.$inferInsert>) {
+  const n = ++seedCounter;
+  const [doc] = await adminDb
+    .insert(documents)
+    .values({
+      organizationId: orgId,
+      source: "upload",
+      originalFilename: `invoice-${n}.pdf`,
+      storageKey: `documents/${orgId}/invoice-${n}.pdf`,
+      contentHash: `hash-${Date.now()}-${n}`,
+    })
+    .returning({ id: documents.id });
+
   const [invoice] = await adminDb
     .insert(extractedInvoices)
     .values({
       organizationId: orgId,
-      documentId,
+      documentId: doc.id,
       documentType: "invoice",
       vendorName: "Acme Supplies LLC",
-      invoiceNumber: `INV-${Date.now()}`,
+      invoiceNumber: `INV-${Date.now()}-${n}`,
       invoiceDate: "2026-06-01",
       dueDate: "2026-07-01",
       currency: "USD",
@@ -118,12 +124,12 @@ async function seedInvoice(overrides: Partial<typeof extractedInvoices.$inferIns
       ...overrides,
     })
     .returning();
-  return invoice;
+  return { invoice, documentId: doc.id };
 }
 
 describe("runInvoiceValidation", () => {
   it("clean invoice: no blocking findings, exact vendor match, validation_results + vendor_matches rows inserted", async () => {
-    const invoice = await seedInvoice({});
+    const { invoice, documentId } = await seedInvoice({});
 
     await userDb.transaction(async (tx) => {
       await tx.execute(sql`select set_config('app.current_org_id', ${orgId}, true)`);
@@ -158,7 +164,7 @@ describe("runInvoiceValidation", () => {
   });
 
   it("missing invoice number: blocking finding, newReviewStatus is needs_review", async () => {
-    const invoice = await seedInvoice({ invoiceNumber: null });
+    const { invoice, documentId } = await seedInvoice({ invoiceNumber: null });
 
     await userDb.transaction(async (tx) => {
       await tx.execute(sql`select set_config('app.current_org_id', ${orgId}, true)`);
@@ -184,7 +190,7 @@ describe("runInvoiceValidation", () => {
   });
 
   it("re-running validation soft-supersedes the prior active row instead of leaving two active rows", async () => {
-    const invoice = await seedInvoice({});
+    const { invoice, documentId } = await seedInvoice({});
 
     for (let i = 0; i < 2; i++) {
       await userDb.transaction(async (tx) => {
@@ -206,7 +212,7 @@ describe("runInvoiceValidation", () => {
   });
 
   it("persists per-line confidence when the invoice has priced lines", async () => {
-    const invoice = await seedInvoice({});
+    const { invoice, documentId } = await seedInvoice({});
     await adminDb.insert(extractedInvoiceLines).values({
       organizationId: orgId,
       extractedInvoiceId: invoice.id,
