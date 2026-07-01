@@ -169,23 +169,20 @@ RULES block it).
   (`gen_random_uuid()`); practical uniqueness is unaffected. No code
   does a single-column `eq(auditEvents.id, x)` write (the RULES block
   UPDATE/DELETE outright); the one read usage is a SELECT projection.
-- **A `DEFAULT` partition** (`audit_events_default`) catches all
-  pre-migration historical rows and anything that ever falls outside
-  the explicitly-created monthly ranges — the safety net if the
-  partition-maintenance job below ever falls behind.
+- **A `DEFAULT` partition** (`audit_events_default`) exists only as a
+  safety net — it must stay EMPTY under normal operation. Every
+  historical month gets its own explicit partition, computed from the
+  actual data range and created *before* any row is copied in (see the
+  bug note below for why this ordering matters).
 - **`create_audit_events_partition(month_start date)`** is a reusable
-  SQL function (defined at the end of 0030) that creates one month's
-  partition, idempotently, with RLS + policy + grants matching the
-  parent. Both the initial migration and the scheduled job below call
-  it.
+  SQL function (defined in 0030) that creates one month's partition,
+  idempotently, with RLS + policy + grants matching the parent. Both
+  the migration's historical backfill and the scheduled job below
+  call it.
 - **`ensureAuditEventPartitions` job**
   (`src/jobs/ensureAuditEventPartitions.ts`) runs daily, calling
   `create_audit_events_partition()` for the current month + a 2-month
-  buffer. If this job ever stops running (worker down for months),
-  new audit rows keep working correctly — they just land in the
-  DEFAULT partition until the job catches up and a subsequent
-  partition creation migrates matching rows out automatically
-  (standard Postgres behavior for `PARTITION OF ... DEFAULT`).
+  buffer.
 - **RLS is enabled on every partition individually**, not just the
   parent. Enforcement via the parent alone is sufficient for all real
   traffic (nothing in this codebase ever names a partition directly),
@@ -194,12 +191,78 @@ RULES block it).
 - **The old (pre-partition) table is renamed to
   `audit_events_pre_partition_backup`, not dropped.** Verify the new
   partitioned table looks correct before dropping the backup in a
-  follow-up migration — this wasn't tested against a real populated
-  database (no local Postgres was available when it was written; CI's
-  fresh-empty-DB run only validates the zero-rows path). If you're
-  running this migration against an environment with meaningful
-  existing `audit_events` data, take a `pg_dump` of that table first
-  as an extra safety net beyond the in-SQL rename.
+  follow-up migration.
+
+#### Bug found and fixed: `DEFAULT` partitions do not auto-migrate rows
+
+An earlier version of 0030 copied all historical data into
+`audit_events_default` and then relied on the assumption that
+"Postgres automatically migrates rows out of `DEFAULT` when an
+overlapping explicit partition is created." **That assumption is
+false.** Postgres scans the `DEFAULT` partition and *errors* if it
+finds a conflicting row — it never moves anything automatically. The
+original step order (copy data into `DEFAULT`, then create the
+current-month partition) was a guaranteed failure on any database
+with same-month pre-existing rows — i.e. any live system, ever. It
+only "passed" in CI because CI's Postgres starts empty every run and
+migrations execute before any application code inserts a row, so
+there was nothing in `DEFAULT` to conflict with. This is exactly the
+kind of defect a fresh-empty-DB test environment is structurally
+unable to catch.
+
+Fixed by reordering: the migration now computes the real historical
+`MIN`/`MAX` of `created_at` from the old table and pre-creates every
+needed monthly partition (with a 20-year sanity cap against corrupt
+timestamps) **before** copying any data, so no row ever needs to move
+out of `DEFAULT` — each lands directly in its correct partition on
+first insert. `DEFAULT` now stays genuinely empty after a successful
+run.
+
+The residual risk — the `ensureAuditEventPartitions` job falling
+behind by more than its 2-month buffer, so a later catch-up partition
+creation hits real data that accumulated in `DEFAULT` during the gap
+— still exists and is unavoidable without either (a) an unbounded
+buffer, or (b) auto-healing inside the function by briefly dropping
+the append-only RULE, which isn't worth the risk in an unattended cron
+job. `create_audit_events_partition()` now fails LOUDLY with an
+actionable message pointing here if this ever happens, instead of
+Postgres's raw constraint-violation error.
+
+#### Recovering a missed `audit_events` partition
+
+If `ensureAuditEventPartitions`'s logs (or a migration re-run) show
+`create_audit_events_partition` failing with a message about the
+default partition's constraint being violated, the job fell behind
+and `audit_events_default` now holds real rows for the month you're
+trying to create. `audit_events`'s append-only RULES make a normal
+`UPDATE` a silent no-op, so moving the conflicting rows out requires
+briefly dropping the RULE. Run as `app_admin`, replacing the month
+range:
+
+```sql
+BEGIN;
+  -- Brief window; DDL on the table takes an ACCESS EXCLUSIVE lock,
+  -- so no concurrent session can slip an UPDATE/DELETE through while
+  -- the RULE is down — everything else just queues behind this tx.
+  DROP RULE audit_events_no_update ON audit_events;
+
+  -- A same-value UPDATE on the partition key forces Postgres to
+  -- re-route each row to the partition matching its current value —
+  -- this is what actually "moves" a row between partitions.
+  UPDATE audit_events_default
+    SET created_at = created_at
+    WHERE created_at >= '2026-MM-01' AND created_at < '2026-MM-01'::date + INTERVAL '1 month';
+
+  CREATE RULE audit_events_no_update AS ON UPDATE TO audit_events DO INSTEAD NOTHING;
+COMMIT;
+
+-- Now safe to create the month's partition.
+SELECT create_audit_events_partition('2026-MM-01'::date);
+```
+
+If this is happening at all, also investigate why the job stopped
+running for that long — this is a symptom of a worker outage or
+scheduler misconfiguration, not just a partition to patch up.
 
 ### drizzle-kit's generated-migration track had drifted (partially fixed)
 
