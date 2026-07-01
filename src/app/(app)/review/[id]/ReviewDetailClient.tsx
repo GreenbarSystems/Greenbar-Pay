@@ -10,7 +10,7 @@
  *   §4.7 concurrency rejects stale edits with a 409.
  * - Approve / reject use `Idempotency-Key` (§4.6).
  */
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import dynamic from "next/dynamic";
 import { useRouter } from "next/navigation";
 import type { UserRole } from "@/lib/rbac";
@@ -205,9 +205,36 @@ export default function ReviewDetailClient(props: Props) {
   const [form, setForm] = useState<InvoiceShape>(props.invoice);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Distinguishes the 409-stale-edit error from any other failure so
+  // the banner can offer a "Reload latest version" action instead of
+  // just text (M5 — the prior behavior left the user stuck: the
+  // banner said "reload" but nothing in the UI did it for them).
+  const [staleEdit, setStaleEdit] = useState(false);
   const [info, setInfo] = useState<string | null>(null);
   const [overrideOpen, setOverrideOpen] = useState(false);
   const [rejectOpen, setRejectOpen] = useState(false);
+
+  // M6 — cache the Idempotency-Key per (action, payload) so a manual
+  // retry of the SAME action with the SAME payload replays the same
+  // key and hits the server's 24h idempotency cache (§4.6) instead of
+  // minting a fresh key that can never match. Keyed by a cheap
+  // JSON.stringify "hash" of the payload — these bodies are small and
+  // exact-match is all that's needed (not a real hash function). A
+  // genuinely different payload (edited override justification, a
+  // different reject reason) gets a fresh key, which is correct: it's
+  // a different logical request and should not collide with a cached
+  // response for the old one.
+  const idempotencyCacheRef = useRef<
+    Record<string, { payloadHash: string; key: string } | undefined>
+  >({});
+  function idempotencyKeyFor(action: string, payload: unknown): string {
+    const payloadHash = JSON.stringify(payload);
+    const cached = idempotencyCacheRef.current[action];
+    if (cached && cached.payloadHash === payloadHash) return cached.key;
+    const key = crypto.randomUUID();
+    idempotencyCacheRef.current[action] = { payloadHash, key };
+    return key;
+  }
 
   const isTerminal = ["approved", "rejected", "exported"].includes(form.reviewStatus);
 
@@ -224,6 +251,7 @@ export default function ReviewDetailClient(props: Props) {
     if (!canEdit || isTerminal) return;
     setSaving(true);
     setError(null);
+    setStaleEdit(false);
     setInfo(null);
     const body: Record<string, unknown> = {};
     for (const k of FIELDS) {
@@ -237,12 +265,19 @@ export default function ReviewDetailClient(props: Props) {
           "If-Match": form.updatedAt,
           // PR2: client-generated UUID makes network retries replay-safe
           // (server caches the prior response for 24h, avoiding phantom
-          // audit rows from duplicate deliveries).
-          "Idempotency-Key": crypto.randomUUID(),
+          // audit rows from duplicate deliveries). Keyed on the outgoing
+          // body + If-Match so a retry with the SAME edits and the SAME
+          // base version replays; a retry after the base version moved
+          // (fresh If-Match) correctly gets a fresh key.
+          "Idempotency-Key": idempotencyKeyFor("patch", {
+            body,
+            ifMatch: form.updatedAt,
+          }),
         },
         body: JSON.stringify(body),
       });
       if (res.status === 409) {
+        setStaleEdit(true);
         setError(
           "This invoice was edited elsewhere. Reload to see the latest version.",
         );
@@ -252,6 +287,22 @@ export default function ReviewDetailClient(props: Props) {
         const j = await res.json().catch(() => ({}));
         setError(j.message ?? j.error ?? `HTTP ${res.status}`);
         return;
+      }
+      // M7 — sync the fields the PATCH response actually returns
+      // (updatedAt, reviewStatus) into local state immediately, rather
+      // than waiting for router.refresh()'s RSC round-trip. Without
+      // this, a second quick edit before the refresh lands sends the
+      // now-stale `form.updatedAt` as If-Match and gets an avoidable
+      // 409 against the reviewer's own successful save.
+      const json = (await res.json().catch(() => null)) as
+        | { updatedAt?: string; reviewStatus?: string }
+        | null;
+      if (json?.updatedAt) {
+        setForm((prev) => ({
+          ...prev,
+          updatedAt: json.updatedAt!,
+          reviewStatus: json.reviewStatus ?? prev.reviewStatus,
+        }));
       }
       router.refresh();
       setInfo("Saved.");
@@ -270,18 +321,23 @@ export default function ReviewDetailClient(props: Props) {
     // prevents a misclick when the override modal is closed.
     if (hasBlockingFindings && !overridePayload) return;
     setError(null);
+    setStaleEdit(false);
+    const approveBody = overridePayload
+      ? {
+          overrideJustification: overridePayload.overrideJustification,
+          secondApproverId: overridePayload.secondApproverId ?? undefined,
+        }
+      : {};
     const init: RequestInit = {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "Idempotency-Key": crypto.randomUUID(),
+        // M6 — reuse the key across a manual retry of the identical
+        // approve (same override payload, if any); a genuinely
+        // different payload (edited justification) mints a fresh key.
+        "Idempotency-Key": idempotencyKeyFor("approve", approveBody),
       },
-      body: overridePayload
-        ? JSON.stringify({
-            overrideJustification: overridePayload.overrideJustification,
-            secondApproverId: overridePayload.secondApproverId ?? undefined,
-          })
-        : "{}",
+      body: JSON.stringify(approveBody),
     };
     const res = await fetch(`/api/ap/review/${form.id}/approve`, init);
     if (!res.ok) {
@@ -296,11 +352,13 @@ export default function ReviewDetailClient(props: Props) {
   async function handleReject(payload: { reasonCode: string; note?: string }) {
     if (!canReject || isTerminal) return;
     setError(null);
+    setStaleEdit(false);
     const res = await fetch(`/api/ap/review/${form.id}/reject`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "Idempotency-Key": crypto.randomUUID(),
+        // M6 — same reuse-by-payload pattern as approve/PATCH above.
+        "Idempotency-Key": idempotencyKeyFor("reject", payload),
       },
       body: JSON.stringify(payload),
     });
@@ -465,8 +523,17 @@ export default function ReviewDetailClient(props: Props) {
           </div>
 
           {error && (
-            <div className="mt-3 rounded-md border border-red-200 bg-red-50 p-2 text-xs text-red-900">
-              {error}
+            <div className="mt-3 flex items-center justify-between gap-2 rounded-md border border-red-200 bg-red-50 p-2 text-xs text-red-900">
+              <span>{error}</span>
+              {staleEdit && (
+                <button
+                  type="button"
+                  onClick={() => router.refresh()}
+                  className="shrink-0 rounded border border-red-300 bg-white px-2 py-0.5 font-medium text-red-900 hover:bg-red-100"
+                >
+                  Reload latest version
+                </button>
+              )}
             </div>
           )}
           {info && !error && (
