@@ -16,7 +16,6 @@ import { drizzle } from "drizzle-orm/node-postgres";
 import { sql, eq } from "drizzle-orm";
 import * as schema from "@/db/schema";
 import {
-  auditEvents,
   documents,
   extractedInvoiceLines,
   extractedInvoices,
@@ -83,12 +82,16 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  // audit_events.organization_id is RESTRICT (append-only audit trail
-  // must not silently vanish when an org is deleted — see
-  // src/db/schema/auditEvents.ts) — unlike every other tenant table
-  // here, it does NOT cascade, so it must be cleared explicitly first.
-  await adminDb.delete(auditEvents).where(eq(auditEvents.organizationId, orgId));
-  await adminDb.delete(organizations).where(eq(organizations.id, orgId));
+  // audit_events carries an explicit `ON DELETE DO INSTEAD NOTHING`
+  // RULE (migration 0019/0030) — the append-only audit trail must not
+  // silently vanish, so DELETE on it is a genuine no-op, not something
+  // this test can undo. Once this test org has an audit event (the
+  // "persists per-line confidence" case emits
+  // line_confidence.recalculated), audit_events_organization_id_fkey
+  // makes the org itself permanently undeletable too — by design, not
+  // a bug. CI's Postgres service is a throwaway container torn down
+  // with the job, so leaving this row behind is harmless; don't
+  // attempt the delete.
   await userPool.end();
   await adminPool.end();
 });
