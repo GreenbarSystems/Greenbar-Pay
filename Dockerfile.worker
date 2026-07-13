@@ -38,6 +38,16 @@ COPY src/jobs ./src/jobs
 COPY src/lib ./src/lib
 COPY scripts ./scripts
 
+# F5 fix (2026-07-12 security audit): don't run as root. This image
+# parses untrusted, user-uploaded/emailed PDFs via pdftoppm/tesseract in
+# the OCR job pipeline — a parser bug there shouldn't hand an attacker a
+# root shell in the container. node:20-alpine ships a non-root `node`
+# user (uid/gid 1000) built in; `chown` is needed because COPY defaults
+# to root ownership and tesseract.js writes to /app at runtime
+# (language-data cache under TESSDATA_PREFIX).
+RUN chown -R node:node /app
+USER node
+
 # No HTTP port to expose. Crashes restart per docker-compose policy;
 # pg-boss redelivers any in-flight jobs.
 CMD ["npx", "tsx", "scripts/worker.ts"]
