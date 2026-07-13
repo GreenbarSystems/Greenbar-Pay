@@ -41,6 +41,25 @@ services:
       timeout: 3s
       retries: 20
 
+  # AV scanning daemon (addendum §2.6 / 2026-07-13 audit F3) — every
+  # upload and email attachment is scanned via clamd's INSTREAM protocol
+  # before it's accepted (src/lib/security/clamav.ts). First boot
+  # downloads virus definitions (freshclam), so the healthcheck can take
+  # a couple of minutes to go green.
+  clamav:
+    image: clamav/clamav:stable
+    container_name: greenbar-clamav
+    ports:
+      - "3310:3310"
+    volumes:
+      - clamav-data:/var/lib/clamav
+    healthcheck:
+      test: ["CMD", "clamdcheck.sh"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
+
   # Provision the documents bucket exactly once on startup.
   createbuckets:
     image: minio/mc
@@ -69,6 +88,8 @@ services:
         condition: service_healthy
       minio:
         condition: service_healthy
+      clamav:
+        condition: service_healthy
     environment:
       DATABASE_URL: postgres://app_user:app_user_pw@postgres:5432/greenbar
       DATABASE_URL_WORKER: postgres://app_worker:app_worker_pw@postgres:5432/greenbar
@@ -79,7 +100,10 @@ services:
       S3_SECRET_ACCESS_KEY: minioadmin
       S3_BUCKET_DOCUMENTS: greenbar-documents
       S3_FORCE_PATH_STYLE: "true"
+      CLAMD_HOST: clamav
+      CLAMD_PORT: "3310"
 
 volumes:
   pgdata:
   minio:
+  clamav-data:

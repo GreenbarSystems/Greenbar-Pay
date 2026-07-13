@@ -214,6 +214,47 @@ These aren't rules for new code — they're things that have surprised
 people in deploy / pre-pilot review. Keep them in mind when touching
 adjacent code.
 
+### File-safety AV scan and PDF sanitization are real, not stubs (2026-07-13 audit F3)
+
+`src/lib/file-safety.ts`'s `inspectUpload()` — the single gate both the
+manual upload route and the AP inbox email-ingest path funnel every
+file through — used to default to passthrough stubs that accepted
+every file as clean and unsanitized. Fixed:
+
+- **AV scan**: `src/lib/security/clamav.ts` talks to a clamd daemon
+  over its INSTREAM protocol. Configured via `CLAMD_HOST`/`CLAMD_PORT`.
+  A module-scope assertion refuses to start with `NODE_ENV=production`
+  and no `CLAMD_HOST` set (same "fail loud at boot" pattern as F1's
+  `assertNoDevAuthInProduction`) — but note Next.js route handlers
+  aren't necessarily loaded at process start, so in practice this
+  fires on the first request that imports the module, not literally
+  at `next start`. Outside production, an unset `CLAMD_HOST` degrades
+  to pass-through with a loud `console.warn`, so local dev doesn't
+  require running ClamAV. `docker-compose.yml`'s `clamav` service
+  provides a real one (`docker compose up -d clamav`) — first boot
+  downloads virus definitions and can take a couple of minutes.
+  CI does **not** run a live ClamAV container; the INSTREAM wire
+  protocol (chunk framing, response parsing) is instead verified
+  against an in-process fake TCP server in
+  `src/lib/security/__tests__/clamav.test.ts` — sufficient to prove
+  correctness without the CI time cost of a virus-definition download.
+- **PDF sanitization**: `src/lib/security/pdf-sanitize.ts` uses
+  `pdf-lib` to strip `/OpenAction`, `/AA` (additional actions,
+  document- and page- and annotation-level), the `/Names/JavaScript`
+  and `/Names/EmbeddedFiles` name trees, and `/AcroForm/XFA` — the
+  entry points a spec-compliant PDF viewer uses to run embedded
+  actions. This removes *references* to the dangerous objects, not
+  necessarily every byte of them from the file (pdf-lib has no public
+  API to garbage-collect orphaned objects on save) — an object
+  unreachable from the catalog/page tree is inert to any
+  standards-compliant parser (including pdf.js, which the reviewer's
+  `PdfViewer` uses), so this is sufficient, but it is not a full
+  file rewrite.
+
+Both hooks stay injectable (`opts.av`/`opts.sanitizer` on
+`inspectUpload`) so tests can substitute fakes instead of requiring a
+live ClamAV or parsing real PDFs.
+
 ### PgBouncer must be transaction-mode (not session-mode)
 
 `withOrg` sets the tenant GUC via `SET LOCAL app.current_org_id = $1`

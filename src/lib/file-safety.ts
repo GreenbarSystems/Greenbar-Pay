@@ -2,11 +2,18 @@
  * Upload-boundary file safety (addendum §2.6). Runs before any `documents`
  * row exists; failures return a structured error and never touch the DB.
  *
- * Phase 1: size, MIME sniff (magic bytes — not the HTTP header), and content
- * hash. AV scan and qpdf sanitization are exposed as hook points but stubbed —
- * they wire up to real binaries in the deploy pipeline.
+ * Size, MIME sniff (magic bytes — not the HTTP header), content hash,
+ * AV scan, and PDF sanitization. AV/sanitizer are exposed as injectable
+ * hook points (`opts.av`/`opts.sanitizer`) so tests can substitute
+ * fakes; real callers get the production implementations
+ * (src/lib/security/clamav.ts, src/lib/security/pdf-sanitize.ts) by
+ * default. Fixes "F3: AV scan + PDF sanitizer are no-op stubs" from
+ * the 2026-07-13 security audit — previously both defaults were
+ * passthroughs that accepted every file as clean/unsanitized.
  */
 import { createHash } from "node:crypto";
+import { clamAvScan } from "./security/clamav";
+import { pdfLibSanitize } from "./security/pdf-sanitize";
 
 export const MAX_FILE_BYTES = 25 * 1024 * 1024; // 25 MB (§2.6)
 export const MAX_FILES_PER_BATCH = 25;
@@ -73,22 +80,17 @@ export function sha256(buf: Buffer): string {
 }
 
 /**
- * Phase 1 stub. In production this shells out to clamdscan or a managed AV.
- * Implemented as an injectable hook so the upload pipeline can be tested
- * without ClamAV running locally.
+ * Real implementation: src/lib/security/clamav.ts, talking to a clamd
+ * daemon. Implemented as an injectable hook so tests can substitute a
+ * fake instead of requiring a live ClamAV.
  */
 export type AvScanner = (buf: Buffer) => Promise<{ clean: boolean; reason?: string }>;
 
-const passthroughAv: AvScanner = async () => ({ clean: true });
-
 /**
- * Phase 1 stub. Production runs:
- *   qpdf --no-original-object-ids --object-streams=generate in.pdf out.pdf
+ * Real implementation: src/lib/security/pdf-sanitize.ts, using pdf-lib
  * to strip JS actions, embedded files, and XFA forms.
  */
 export type PdfSanitizer = (buf: Buffer) => Promise<Buffer>;
-
-const passthroughSanitizer: PdfSanitizer = async (buf) => buf;
 
 export interface InspectResult {
   buf: Buffer; // post-sanitization
@@ -119,7 +121,7 @@ export async function inspectUpload(
     );
   }
 
-  const av = opts.av ?? passthroughAv;
+  const av = opts.av ?? clamAvScan;
   const scan = await av(raw);
   if (!scan.clean) {
     throw new FileSafetyError(
@@ -130,13 +132,13 @@ export async function inspectUpload(
 
   let buf = raw;
   if (sniffed === "application/pdf") {
-    const sanitize = opts.sanitizer ?? passthroughSanitizer;
+    const sanitize = opts.sanitizer ?? pdfLibSanitize;
     try {
       buf = await sanitize(raw);
     } catch (err) {
       throw new FileSafetyError(
         "sanitization_failed",
-        (err as Error).message ?? "qpdf sanitization failed",
+        (err as Error).message ?? "PDF sanitization failed",
       );
     }
   }
