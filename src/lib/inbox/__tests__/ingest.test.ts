@@ -179,4 +179,67 @@ describe.skipIf(!process.env.S3_ACCESS_KEY_ID)("AP inbox ingest", () => {
       );
     expect(unrouted).toHaveLength(1);
   });
+
+  // 2026-07-13 audit F11 — a message that fails sender authentication
+  // must be rejected even when it routes to a real, valid org/client
+  // (the exact scenario an attacker who has guessed a valid inbox
+  // address is trying to exploit) — no attachment or document ever
+  // gets created for it.
+  it("a message that fails SPF+DKIM is rejected before any attachment is processed, even when correctly routed", async () => {
+    const fixtureBytes = readFileSync(
+      path.resolve(__dirname, "fixtures/sample.eml"),
+    );
+    const patched = Buffer.from(
+      fixtureBytes
+        .toString("utf8")
+        .replace(
+          "ap+acme--bigco@in.invoice-ai.com",
+          `ap+${ORG_SLUG}--${CLIENT_SLUG}@in.invoice-ai.com`,
+        )
+        .replace("test-message-001@example.com", "test-message-spoofed@example.com"),
+      "utf8",
+    );
+    const key = `inbound/test/spoofed-${Date.now()}.eml`;
+    await storage.putObject({
+      key,
+      body: patched,
+      contentType: "message/rfc822",
+    });
+
+    const result = await ingestEmlMessage({
+      rawMessageStorageKey: key,
+      mailbox: `ap+${ORG_SLUG}--${CLIENT_SLUG}@in.invoice-ai.com`,
+      authentication: { spfVerdict: "FAIL", dkimVerdict: "FAIL" },
+    });
+    expect(result.kind).toBe("ingested");
+    if (result.kind !== "ingested") throw new Error("expected ingested");
+    expect(result.status).toBe("failed");
+    expect(result.acceptedDocumentIds).toHaveLength(0);
+
+    const failedRow = await db
+      .select({ status: emailMessages.status, statusReason: emailMessages.statusReason })
+      .from(emailMessages)
+      .where(eq(emailMessages.rawMessageStorageKey, key));
+    expect(failedRow).toHaveLength(1);
+    expect(failedRow[0].status).toBe("failed");
+    expect(failedRow[0].statusReason).toContain("SPF and DKIM both failed");
+    // Routing WOULD have succeeded (valid org/client) — confirms the
+    // rejection is about authentication, not routing.
+    expect(failedRow[0].statusReason).not.toContain("no org/client matches");
+
+    // Only the one attachment/document from the first ("ingests a
+    // routed message") test — the spoofed message contributed nothing
+    // to either table, for this org.
+    const attRows = await db
+      .select({ id: emailAttachments.id })
+      .from(emailAttachments)
+      .where(eq(emailAttachments.organizationId, orgId));
+    expect(attRows).toHaveLength(1);
+
+    const docRows = await db
+      .select({ id: documents.id })
+      .from(documents)
+      .where(eq(documents.organizationId, orgId));
+    expect(docRows).toHaveLength(1);
+  });
 });
