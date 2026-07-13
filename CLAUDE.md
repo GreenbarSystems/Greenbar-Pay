@@ -281,10 +281,10 @@ only a **global** concurrency cap exists on the OCR/LLM job pipeline
 `src/jobs/index.ts`), and pg-boss processes each queue strictly FIFO.
 Concurrency limiting per org wouldn't fix anything — batchSize:1
 already means one job runs at a time system-wide. The actual danger
-is queue **depth**: one org flooding the upload route (or, until F11's
-missing sender authentication is fixed, email to a guessed inbox
-address) can queue-starve every other org's documents behind it
-indefinitely. Capping ingest *rate* at both entry points bounds how
+is queue **depth**: one org flooding the upload route (or email to a
+guessed inbox address — see F11 below for why that's no longer
+unauthenticated) can queue-starve every other org's documents behind
+it indefinitely. Capping ingest *rate* at both entry points bounds how
 deep that flood can get.
 
 Implementation mirrors `quotaRemaining()` — counts existing
@@ -297,6 +297,49 @@ AV-scan/sanitize/storage work runs; checked per-attachment in
 for it. Both paths record the rejection (429 for uploads,
 `email_attachments.status='rejected'` for email) rather than silently
 dropping the request.
+
+### Inbound email sender authentication (2026-07-13 audit F11)
+
+`src/lib/inbox/authentication.ts`'s `evaluateSenderAuthentication()`
+rejects an inbound email that fails SPF+DKIM (or fails DMARC under an
+enforcing policy) — before F11, ANY email delivered to a syntactically
+valid `ap+org--client@in.<domain>` address was ingested and its
+attachments processed as a candidate invoice regardless of who
+actually sent it, spoofed `From:` header included.
+
+**Deliberately not an allowlist.** This is an AP inbox that accepts
+invoices from arbitrary vendors an org has never emailed before —
+there's no fixed set of "known senders" to allowlist without breaking
+the actual use case. SPF/DKIM/DMARC verify the `From:` DOMAIN is who
+it claims to be; they don't restrict WHO is allowed to send, which is
+the correct control for this product.
+
+**No new AWS infrastructure needed.** SES evaluates SPF/DKIM/DMARC on
+every inbound message by default and already delivered the verdicts
+in the same `ses.receipt` SNS notification object
+`src/lib/inbox/sqs.ts` was already reading `recipients` from — the
+gap was that the app discarded the rest of that object instead of
+reading it.
+
+**Policy — reject only on affirmative, unambiguous failure:**
+- SPF FAIL **and** DKIM FAIL → reject. Either alone passing is normal
+  for legitimate mail (forwarded mail commonly breaks SPF but DKIM
+  survives), so a single pass is accepted.
+- DMARC FAIL **and** the domain's own published policy is
+  `quarantine`/`reject` → reject (honoring the sending domain's stated
+  intent is the strongest signal available).
+- `GRAY` / `PROCESSING_FAILED` / missing verdicts → **fail open**.
+  Inconclusive is not evidence of spoofing. This also covers local dev
+  / `scripts/ingest-eml.ts`, which has no real SES receipt at all —
+  `input.authentication` is `undefined` there, not a fabricated pass.
+
+Checked in `src/lib/inbox/ingest.ts` regardless of routing outcome —
+an attacker who has guessed a valid org's inbox address is exactly the
+threat this closes, so it's rejected even when it WOULD have routed.
+A rejected message still gets an `email_messages` row
+(`status='failed'`, `status_reason` naming which check failed) for
+audit trail — no `email_attachments` or `documents` row is ever
+created for it.
 
 ### PgBouncer must be transaction-mode (not session-mode)
 

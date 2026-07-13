@@ -37,6 +37,10 @@ import { parseInboxAddress } from "./address";
 import { getQueue, JOB } from "@/lib/queue";
 import { scrubError } from "@/lib/llm/scrub";
 import { checkIngestRateLimit } from "@/lib/security/ingest-rate-limit";
+import {
+  evaluateSenderAuthentication,
+  type SesAuthenticationVerdicts,
+} from "./authentication";
 
 const PROVIDER = "ses"; // V1 — Phase 6 only wires SES. Extend with a router later.
 
@@ -52,6 +56,13 @@ export interface IngestInput {
   rawMessageStorageKey: string;
   /** The mailbox the message arrived at — used as the indexed lookup key. */
   mailbox: string;
+  /**
+   * 2026-07-13 audit F11 — SPF/DKIM/DMARC verdicts SES attached to
+   * this delivery. Undefined for local dev / CLI ingestion (no SES
+   * receipt exists) — evaluateSenderAuthentication() fails open on
+   * that, not closed. See src/lib/inbox/authentication.ts.
+   */
+  authentication?: SesAuthenticationVerdicts;
 }
 
 export type IngestResult =
@@ -83,6 +94,12 @@ export async function ingestEmlMessage(input: IngestInput): Promise<IngestResult
       ? null
       : await resolveOrgClient(routing.orgSlug, routing.clientSlug);
 
+  // 3b. 2026-07-13 audit F11 — sender authentication. Checked
+  // regardless of routing outcome: an attacker who has guessed a valid
+  // org's inbox address is exactly the threat this closes, so a
+  // spoofed message gets rejected even when it WOULD have routed.
+  const authDecision = evaluateSenderAuthentication(input.authentication);
+
   const messageRowId = randomUUID();
   const orgId = resolution?.organizationId ?? null;
   const clientId = resolution?.clientId ?? null;
@@ -106,7 +123,8 @@ export async function ingestEmlMessage(input: IngestInput): Promise<IngestResult
       subject: parsed.subject,
       bodyText: parsed.bodyText,
       receivedAt: parsed.receivedAt,
-      status: "processing",
+      status: authDecision.accepted ? "processing" : "failed",
+      statusReason: authDecision.accepted ? null : authDecision.reason,
     })
     .onConflictDoNothing({
       target: [emailMessages.provider, emailMessages.providerMessageId],
@@ -129,6 +147,23 @@ export async function ingestEmlMessage(input: IngestInput): Promise<IngestResult
   }
 
   const emailMessageId = inserted[0].id;
+
+  // 4b. Auth rejected → finalize and exit BEFORE any routing/attachment
+  // work. No email_attachments or documents rows are ever created for
+  // a message that failed sender authentication — see
+  // src/lib/inbox/authentication.ts for the accept/reject policy.
+  if (!authDecision.accepted) {
+    await rawAdminDb
+      .update(emailMessages)
+      .set({ processedAt: sql`now()` })
+      .where(eq(emailMessages.id, emailMessageId));
+    return {
+      kind: "ingested",
+      emailMessageId,
+      status: "failed",
+      acceptedDocumentIds: [],
+    };
+  }
 
   // 5. Unrouted → finalize and exit.
   if (!resolution) {

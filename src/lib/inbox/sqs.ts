@@ -28,6 +28,10 @@ import {
 import { ingestEmlMessage } from "./ingest";
 import { scrub } from "@/lib/llm/scrub";
 
+interface SesVerdict {
+  status?: "PASS" | "FAIL" | "GRAY" | "PROCESSING_FAILED";
+}
+
 interface SesNotification {
   Records?: Array<{
     s3?: {
@@ -35,7 +39,16 @@ interface SesNotification {
       object?: { key?: string };
     };
     ses?: {
-      receipt?: { recipients?: string[] };
+      receipt?: {
+        recipients?: string[];
+        // 2026-07-13 audit F11 — SES evaluates these on every inbound
+        // message; we were reading `recipients` from this same object
+        // and discarding the rest. See src/lib/inbox/authentication.ts.
+        spfVerdict?: SesVerdict;
+        dkimVerdict?: SesVerdict;
+        dmarcVerdict?: SesVerdict;
+        dmarcPolicy?: "none" | "quarantine" | "reject";
+      };
     };
   }>;
 }
@@ -125,9 +138,18 @@ async function handleSqsMessage(
       // Recipients come from the SES envelope, not parsed MIME. Use the
       // first one as the mailbox indexed key; parseEml extracts all.
       const mailbox = record.ses?.receipt?.recipients?.[0] ?? "unknown";
+      const receipt = record.ses?.receipt;
       const result = await ingestEmlMessage({
         rawMessageStorageKey: key,
         mailbox,
+        authentication: receipt
+          ? {
+              spfVerdict: receipt.spfVerdict?.status,
+              dkimVerdict: receipt.dkimVerdict?.status,
+              dmarcVerdict: receipt.dmarcVerdict?.status,
+              dmarcPolicy: receipt.dmarcPolicy,
+            }
+          : undefined,
       });
       // PR20 — log a short opaque suffix of the storage key instead
       // of the full path. The key is not direct PII but links the log
