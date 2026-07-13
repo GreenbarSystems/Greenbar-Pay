@@ -223,16 +223,27 @@ every file as clean and unsanitized. Fixed:
 
 - **AV scan**: `src/lib/security/clamav.ts` talks to a clamd daemon
   over its INSTREAM protocol. Configured via `CLAMD_HOST`/`CLAMD_PORT`.
-  A module-scope assertion refuses to start with `NODE_ENV=production`
-  and no `CLAMD_HOST` set (same "fail loud at boot" pattern as F1's
-  `assertNoDevAuthInProduction`) — but note Next.js route handlers
-  aren't necessarily loaded at process start, so in practice this
-  fires on the first request that imports the module, not literally
-  at `next start`. Outside production, an unset `CLAMD_HOST` degrades
-  to pass-through with a loud `console.warn`, so local dev doesn't
-  require running ClamAV. `docker-compose.yml`'s `clamav` service
-  provides a real one (`docker compose up -d clamav`) — first boot
-  downloads virus definitions and can take a couple of minutes.
+  `assertAvScanningConfiguredInProduction` refuses `NODE_ENV=production`
+  calls with no `CLAMD_HOST` set (same spirit as F1's
+  `assertNoDevAuthInProduction` — fail loud instead of silently
+  accepting unscanned files) — **but it's called from inside
+  `clamAvScan`, on every real scan, not at module load time.** A
+  module-scope call was tried first and broke every production Docker
+  build: `next build`'s "Collecting page data" step imports route
+  handler modules (including `/api/invoices/upload`) with
+  `NODE_ENV=production`, but intentionally has no runtime secrets
+  available at build time — CLAMD_HOST is injected into the running
+  container, not baked into the image. A module-scope assertion can't
+  tell "build, no secrets yet" apart from "running, actually
+  misconfigured." Calling it per-invocation instead means it fires on
+  the very first real upload/email scan in a misconfigured deploy —
+  slightly later than "at boot," but before any file is ever treated
+  as scanned, and it doesn't fail the build. Outside production, an
+  unset `CLAMD_HOST` degrades to pass-through with a loud
+  `console.warn`, so local dev doesn't require running ClamAV.
+  `docker-compose.yml`'s `clamav` service provides a real one
+  (`docker compose up -d clamav`) — first boot downloads virus
+  definitions and can take a couple of minutes.
   CI does **not** run a live ClamAV container; the INSTREAM wire
   protocol (chunk framing, response parsing) is instead verified
   against an in-process fake TCP server in

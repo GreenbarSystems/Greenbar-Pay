@@ -1,13 +1,21 @@
 /**
- * Two things to verify without a real ClamAV daemon:
+ * Three things to verify without a real ClamAV daemon:
  *   1. assertAvScanningConfiguredInProduction — pure logic, direct unit test.
  *   2. The INSTREAM wire protocol (chunk framing, zero-length terminator,
  *      "stream: OK" / "stream: ... FOUND" / garbage response parsing) —
  *      exercised against a tiny in-process TCP server that speaks just
  *      enough of the real clamd protocol to prove clamAvScan frames and
  *      parses correctly.
+ *   3. Regression guard for a real bug this module shipped with once
+ *      already: the production assertion must NEVER run at module
+ *      import time, only when clamAvScan is actually invoked.
+ *      `next build`'s "Collecting page data" step imports route
+ *      handler modules with NODE_ENV=production but no runtime
+ *      secrets available — a module-scope assertion call broke every
+ *      production Docker build (see CLAUDE.md's file-safety
+ *      Operational note for the full story).
  */
-import { describe, it, expect, afterEach } from "vitest";
+import { describe, it, expect, afterEach, beforeEach, vi } from "vitest";
 import { createServer, type Server } from "node:net";
 import { assertAvScanningConfiguredInProduction, clamAvScan } from "../clamav";
 
@@ -126,5 +134,44 @@ describe("clamAvScan (INSTREAM protocol against a fake clamd)", () => {
     } finally {
       process.env.CLAMD_HOST = prevHost;
     }
+  });
+});
+
+describe("regression: module import must never throw, regardless of env", () => {
+  let prevHost: string | undefined;
+  let prevNodeEnv: string | undefined;
+
+  beforeEach(() => {
+    prevHost = process.env.CLAMD_HOST;
+    prevNodeEnv = process.env.NODE_ENV;
+  });
+
+  afterEach(() => {
+    process.env.CLAMD_HOST = prevHost;
+    // @ts-expect-error -- NODE_ENV is a plain string at runtime; TS's
+    // ambient type marks it readonly, but restoring it here is safe.
+    process.env.NODE_ENV = prevNodeEnv;
+  });
+
+  it("importing the module with NODE_ENV=production and no CLAMD_HOST does not throw (build-time safety)", async () => {
+    delete process.env.CLAMD_HOST;
+    // @ts-expect-error -- see afterEach.
+    process.env.NODE_ENV = "production";
+    vi.resetModules();
+    // If assertAvScanningConfiguredInProduction were ever called at
+    // module scope again, this import itself would throw — exactly
+    // what broke the production Docker build the first time.
+    await expect(import("../clamav")).resolves.toBeDefined();
+  });
+
+  it("but actually calling clamAvScan under the same conditions does throw", async () => {
+    delete process.env.CLAMD_HOST;
+    // @ts-expect-error -- see afterEach.
+    process.env.NODE_ENV = "production";
+    vi.resetModules();
+    const fresh = await import("../clamav");
+    await expect(fresh.clamAvScan(Buffer.from("x"))).rejects.toThrow(
+      /CLAMD_HOST must be set in production/,
+    );
   });
 });

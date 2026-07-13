@@ -26,8 +26,14 @@ const CHUNK_SIZE = 64 * 1024;
 
 /**
  * Throws if AV scanning has no configured daemon while NODE_ENV is
- * "production". Call at module load time so a misconfigured deploy
- * fails at boot rather than silently accepting every upload unscanned.
+ * "production". Called on every real scan (not at module load time —
+ * `next build`'s "Collecting page data" step imports route handler
+ * modules with NODE_ENV=production but intentionally has no runtime
+ * secrets available, so a module-scope call here would fail every
+ * production build regardless of how the deployed container is
+ * actually configured). This still fails loudly on the very first
+ * real upload/email-scan in a misconfigured production deploy —
+ * before any file is treated as scanned.
  */
 export function assertAvScanningConfiguredInProduction(env: {
   NODE_ENV?: string;
@@ -41,8 +47,6 @@ export function assertAvScanningConfiguredInProduction(env: {
     );
   }
 }
-
-assertAvScanningConfiguredInProduction(process.env);
 
 interface ClamdConfig {
   host: string;
@@ -63,10 +67,11 @@ function loadConfig(): ClamdConfig | null {
 let warnedOnce = false;
 
 export const clamAvScan: AvScanner = async (buf) => {
+  assertAvScanningConfiguredInProduction(process.env);
   const config = loadConfig();
   if (!config) {
-    // Only reachable outside production — the boot assertion above
-    // already refuses to start otherwise.
+    // Only reachable outside production — the assertion above already
+    // refused a production call with no CLAMD_HOST configured.
     if (!warnedOnce) {
       warnedOnce = true;
       console.warn(
