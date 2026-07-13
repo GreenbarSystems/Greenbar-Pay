@@ -5,6 +5,12 @@
 FROM node:20-alpine AS deps
 WORKDIR /app
 COPY package.json package-lock.json* ./
+# `postinstall` (scripts/copy-pdf-worker.mjs, scripts/setup-hooks.mjs)
+# runs as part of `npm install` below and requires scripts/ to already
+# exist -- without this COPY, install fails with MODULE_NOT_FOUND
+# (pre-existing bug, unrelated to F5/F6, caught by adding a real
+# `docker build` to CI as part of this PR's verification work).
+COPY scripts ./scripts
 RUN npm install --no-audit --no-fund
 
 FROM node:20-alpine AS build
