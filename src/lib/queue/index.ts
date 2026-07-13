@@ -45,9 +45,16 @@ export async function getQueue(): Promise<PgBoss> {
     // queue here -- rather than only in scripts/worker.ts -- covers
     // both call sites and boot orderings (e.g. web app enqueuing before
     // the worker has ever started). create_queue() is ON CONFLICT DO
-    // NOTHING under the hood, so this is safe to run on every boot of
-    // every process.
-    await Promise.all(Object.values(JOB).map((name) => b.createQueue(name)));
+    // NOTHING under the hood, so calling it on every process boot is
+    // safe/idempotent -- but sequentially, not via Promise.all: firing
+    // 10 concurrent createQueue() calls at boot triggered real Postgres
+    // "deadlock detected" errors in CI (multiple sessions racing to
+    // insert into pgboss.queue's underlying constraints/triggers at
+    // once). Sequential awaits avoid the contention entirely and only
+    // add a few ms to boot time.
+    for (const name of Object.values(JOB)) {
+      await b.createQueue(name);
+    }
     boss = b;
     return b;
   })();
