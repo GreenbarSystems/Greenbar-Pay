@@ -4,6 +4,13 @@
  * live database to prove (a mocked `tx` would just be testing that
  * the mock returns what the mock was told to return).
  *
+ * Every test gets its OWN organization (created fresh, not shared via
+ * beforeAll) so the exact counts asserted here can't be contaminated
+ * by documents another test in this file seeded — tests run
+ * sequentially against the same database with no cleanup between
+ * them, so a shared org's "documents in the last 10 minutes" count
+ * accumulates across the whole file.
+ *
  * Modeled on src/db/__tests__/rls.test.ts and the vendors/validation
  * module's repository integration tests.
  */
@@ -25,9 +32,8 @@ let userPool: Pool;
 let adminPool: Pool;
 let userDb: ReturnType<typeof drizzle<typeof schema>>;
 let adminDb: ReturnType<typeof drizzle<typeof schema>>;
-let orgId: string;
-let otherOrgId: string;
 let seedCounter = 0;
+const createdOrgIds: string[] = [];
 
 beforeAll(async () => {
   if (!USER_URL || !ADMIN_URL) {
@@ -37,26 +43,25 @@ beforeAll(async () => {
   adminPool = new Pool({ connectionString: ADMIN_URL });
   userDb = drizzle(userPool, { schema });
   adminDb = drizzle(adminPool, { schema });
-
-  const [org] = await adminDb
-    .insert(organizations)
-    .values({ name: "Ingest Rate Limit Test Org", slug: `ingest-rl-test-${Date.now()}` })
-    .returning({ id: organizations.id });
-  orgId = org.id;
-
-  const [other] = await adminDb
-    .insert(organizations)
-    .values({ name: "Other Org", slug: `ingest-rl-other-${Date.now()}` })
-    .returning({ id: organizations.id });
-  otherOrgId = other.id;
 });
 
 afterAll(async () => {
-  await adminDb.delete(organizations).where(eq(organizations.id, orgId));
-  await adminDb.delete(organizations).where(eq(organizations.id, otherOrgId));
+  for (const id of createdOrgIds) {
+    await adminDb.delete(organizations).where(eq(organizations.id, id));
+  }
   await userPool.end();
   await adminPool.end();
 });
+
+async function makeOrg(): Promise<string> {
+  const n = ++seedCounter;
+  const [org] = await adminDb
+    .insert(organizations)
+    .values({ name: `Ingest RL Test ${n}`, slug: `ingest-rl-${Date.now()}-${n}` })
+    .returning({ id: organizations.id });
+  createdOrgIds.push(org.id);
+  return org.id;
+}
 
 async function seedDocument(organizationId: string, receivedAt: Date) {
   const n = ++seedCounter;
@@ -72,6 +77,7 @@ async function seedDocument(organizationId: string, receivedAt: Date) {
 
 describe("checkIngestRateLimit", () => {
   it("allows when well under the limit", async () => {
+    const orgId = await makeOrg();
     const now = new Date();
     for (let i = 0; i < 3; i++) {
       await seedDocument(orgId, now);
@@ -87,6 +93,7 @@ describe("checkIngestRateLimit", () => {
   });
 
   it("blocks once the window's count reaches the limit", async () => {
+    const orgId = await makeOrg();
     const now = new Date();
     for (let i = 0; i < 5; i++) {
       await seedDocument(orgId, now);
@@ -101,6 +108,7 @@ describe("checkIngestRateLimit", () => {
   });
 
   it("excludes documents outside the window", async () => {
+    const orgId = await makeOrg();
     const outsideWindow = new Date(Date.now() - 20 * 60_000); // 20 minutes ago
     for (let i = 0; i < 50; i++) {
       await seedDocument(orgId, outsideWindow);
@@ -118,28 +126,33 @@ describe("checkIngestRateLimit", () => {
   });
 
   it("counts are isolated per organization", async () => {
+    const orgId = await makeOrg();
+    const otherOrgId = await makeOrg();
     const now = new Date();
+
+    await seedDocument(orgId, now); // just 1 — well under any limit
     for (let i = 0; i < 10; i++) {
-      await seedDocument(otherOrgId, now);
+      await seedDocument(otherOrgId, now); // floods otherOrgId
     }
 
     await userDb.transaction(async (tx) => {
       await tx.execute(sql`select set_config('app.current_org_id', ${otherOrgId}, true)`);
       const otherResult = await checkIngestRateLimit(tx, otherOrgId, 10, 10);
       expect(otherResult.allowed).toBe(false);
+      expect(otherResult.remaining).toBe(0);
     });
 
     await userDb.transaction(async (tx) => {
       await tx.execute(sql`select set_config('app.current_org_id', ${orgId}, true)`);
-      // orgId's own count is whatever earlier tests left behind, but it
-      // must be entirely unaffected by otherOrgId's 10 documents.
-      const result = await checkIngestRateLimit(tx, orgId, 1000, 10);
-      expect(result.remaining).toBeLessThanOrEqual(1000);
-      expect(result.remaining).toBeGreaterThan(1000 - 20); // sanity: not 990 short
+      // orgId must be entirely unaffected by otherOrgId's flood.
+      const result = await checkIngestRateLimit(tx, orgId, 10, 10);
+      expect(result.allowed).toBe(true);
+      expect(result.remaining).toBe(9);
     });
   });
 
   it("defaults match the documented constant", async () => {
+    const orgId = await makeOrg();
     await userDb.transaction(async (tx) => {
       await tx.execute(sql`select set_config('app.current_org_id', ${orgId}, true)`);
       const result = await checkIngestRateLimit(tx, orgId);
