@@ -64,3 +64,99 @@ jobs:
       # Addendum §1.6 — cross-tenant RLS gate.
       - run: npm run test:rls
       - run: npm test
+
+  docker-build-and-smoke-test:
+    # F5 verification gate (2026-07-12 security audit): neither Dockerfile
+    # was ever actually built in CI before this job existed, so the
+    # non-root USER change (chown -R node:node /app + USER node) had no
+    # automated check that the images still build and boot correctly as
+    # a non-root user. This job builds both images for real and smoke-
+    # tests that the web container serves a real request (proving `next
+    # start` runs fine as `node`, not just that it builds) and that the
+    # worker container starts and stays up (proving its non-DB startup
+    # path — pg-boss connection setup — doesn't hit a permission error).
+    runs-on: ubuntu-latest
+    needs: lint-and-test
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: app_admin
+          POSTGRES_PASSWORD: app_admin_pw
+          POSTGRES_DB: greenbar
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U app_admin -d greenbar"
+          --health-interval 3s
+          --health-timeout 3s
+          --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build web image
+        run: docker build -t greenbar-pay-web:ci -f Dockerfile .
+
+      - name: Build worker image
+        run: docker build -t greenbar-pay-worker:ci -f Dockerfile.worker .
+
+      - name: Confirm both images run as the non-root node user
+        run: |
+          web_user=$(docker run --rm --entrypoint whoami greenbar-pay-web:ci)
+          echo "web image user: $web_user"
+          [ "$web_user" = "node" ] || { echo "::error::web image is not running as node"; exit 1; }
+
+          worker_user=$(docker run --rm --entrypoint whoami greenbar-pay-worker:ci)
+          echo "worker image user: $worker_user"
+          [ "$worker_user" = "node" ] || { echo "::error::worker image is not running as node"; exit 1; }
+
+      - name: Smoke test — web container serves a request as node
+        run: |
+          docker run -d --name gbp-web --network host \
+            -e NODE_ENV=production \
+            -e AUTH_SECRET=ci-only-not-secret \
+            -e DATABASE_URL=postgres://app_user:app_user_pw@localhost:5432/greenbar \
+            -e DATABASE_URL_WORKER=postgres://app_worker:app_worker_pw@localhost:5432/greenbar \
+            -e DATABASE_URL_ADMIN=postgres://app_admin:app_admin_pw@localhost:5432/greenbar \
+            -e S3_BUCKET_DOCUMENTS=greenbar-documents \
+            greenbar-pay-web:ci
+          for i in $(seq 1 20); do
+            if curl -sf -o /dev/null http://localhost:3000/signin; then
+              echo "web container responded after ${i}s"
+              break
+            fi
+            if [ "$i" = 20 ]; then
+              echo "::error::web container never became ready"
+              docker logs gbp-web
+              exit 1
+            fi
+            sleep 1
+          done
+          echo "--- response headers ---"
+          curl -sD - -o /dev/null http://localhost:3000/signin | tee /tmp/web-headers.txt
+          grep -qi "^Content-Security-Policy:" /tmp/web-headers.txt || { echo "::error::CSP header missing from live container response"; exit 1; }
+          grep -qi "^X-Frame-Options: DENY" /tmp/web-headers.txt || { echo "::error::X-Frame-Options header missing/wrong"; exit 1; }
+          docker logs gbp-web
+          docker rm -f gbp-web
+
+      - name: Smoke test — worker container starts and stays up as node
+        run: |
+          docker run -d --name gbp-worker --network host \
+            -e NODE_ENV=production \
+            -e DATABASE_URL=postgres://app_user:app_user_pw@localhost:5432/greenbar \
+            -e DATABASE_URL_WORKER=postgres://app_worker:app_worker_pw@localhost:5432/greenbar \
+            -e DATABASE_URL_ADMIN=postgres://app_admin:app_admin_pw@localhost:5432/greenbar \
+            -e S3_ENDPOINT=http://localhost:9000 \
+            -e S3_REGION=us-east-1 \
+            -e S3_ACCESS_KEY_ID=minioadmin \
+            -e S3_SECRET_ACCESS_KEY=minioadmin \
+            -e S3_FORCE_PATH_STYLE=true \
+            -e S3_BUCKET_DOCUMENTS=greenbar-documents \
+            greenbar-pay-worker:ci
+          sleep 8
+          if ! docker ps --filter name=gbp-worker --filter status=running -q | grep -q .; then
+            echo "::error::worker container exited early (likely a permission or startup error as non-root)"
+            docker logs gbp-worker
+            exit 1
+          fi
+          docker logs gbp-worker
+          docker rm -f gbp-worker

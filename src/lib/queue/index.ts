@@ -36,6 +36,25 @@ export async function getQueue(): Promise<PgBoss> {
     });
     b.on("error", (err) => console.error("[pg-boss]", err));
     await b.start();
+    // pg-boss v10 dropped auto-create-on-work/send: every named queue
+    // must exist as a row in pgboss.queue (via createQueue) before
+    // work()/schedule()/send() will succeed -- otherwise they fail with
+    // a queue foreign-key violation ("Queue <name> not found"). This
+    // module is the single shared entrypoint used by both the web app
+    // (send) and the worker process (work/schedule), so creating every
+    // queue here -- rather than only in scripts/worker.ts -- covers
+    // both call sites and boot orderings (e.g. web app enqueuing before
+    // the worker has ever started). create_queue() is ON CONFLICT DO
+    // NOTHING under the hood, so calling it on every process boot is
+    // safe/idempotent -- but sequentially, not via Promise.all: firing
+    // 10 concurrent createQueue() calls at boot triggered real Postgres
+    // "deadlock detected" errors in CI (multiple sessions racing to
+    // insert into pgboss.queue's underlying constraints/triggers at
+    // once). Sequential awaits avoid the contention entirely and only
+    // add a few ms to boot time.
+    for (const name of Object.values(JOB)) {
+      await b.createQueue(name);
+    }
     boss = b;
     return b;
   })();
