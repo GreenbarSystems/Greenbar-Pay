@@ -266,6 +266,38 @@ Both hooks stay injectable (`opts.av`/`opts.sanitizer` on
 `inspectUpload`) so tests can substitute fakes instead of requiring a
 live ClamAV or parsing real PDFs.
 
+### Per-org ingest rate limit (2026-07-13 audit F4)
+
+`src/lib/security/ingest-rate-limit.ts`'s `checkIngestRateLimit()` caps
+how many documents an org can ingest (upload route AND email — one
+shared budget, same downstream OCR/LLM pipeline) in a rolling window
+(`DEFAULT_INGEST_RATE_LIMIT` per `INGEST_RATE_LIMIT_WINDOW_MINUTES`).
+
+F4's original "financial DoS (Anthropic bill)" framing turned out to
+be wrong when checked against the code — `src/lib/llm/quota.ts`
+already caps LLM spend per org per day, pre-dispatch. What's real:
+only a **global** concurrency cap exists on the OCR/LLM job pipeline
+(`batchSize: 1` for `processDocument`/`extractInvoiceData` in
+`src/jobs/index.ts`), and pg-boss processes each queue strictly FIFO.
+Concurrency limiting per org wouldn't fix anything — batchSize:1
+already means one job runs at a time system-wide. The actual danger
+is queue **depth**: one org flooding the upload route (or, until F11's
+missing sender authentication is fixed, email to a guessed inbox
+address) can queue-starve every other org's documents behind it
+indefinitely. Capping ingest *rate* at both entry points bounds how
+deep that flood can get.
+
+Implementation mirrors `quotaRemaining()` — counts existing
+`documents` rows in a window rather than a separate counter table,
+using `documents.receivedAt` specifically (not `createdAt`) to reuse
+the existing `idx_documents_org_received` index with no new migration.
+Checked in the upload route immediately after RBAC, before any of the
+AV-scan/sanitize/storage work runs; checked per-attachment in
+`src/lib/inbox/ingest.ts` before a `documents` row or job is created
+for it. Both paths record the rejection (429 for uploads,
+`email_attachments.status='rejected'` for email) rather than silently
+dropping the request.
+
 ### PgBouncer must be transaction-mode (not session-mode)
 
 `withOrg` sets the tenant GUC via `SET LOCAL app.current_org_id = $1`

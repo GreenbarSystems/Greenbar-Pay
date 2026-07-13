@@ -36,6 +36,7 @@ import { parseEml, type ParsedEmail, type ParsedAttachment } from "./parse";
 import { parseInboxAddress } from "./address";
 import { getQueue, JOB } from "@/lib/queue";
 import { scrubError } from "@/lib/llm/scrub";
+import { checkIngestRateLimit } from "@/lib/security/ingest-rate-limit";
 
 const PROVIDER = "ses"; // V1 — Phase 6 only wires SES. Extend with a router later.
 
@@ -154,10 +155,29 @@ export async function ingestEmlMessage(input: IngestInput): Promise<IngestResult
   try {
     await withOrgAsWorker(resolution.organizationId, async (tx) => {
       let accepted = 0;
+      let rateLimited = 0;
 
       for (const att of parsed.attachments) {
         const attachmentRowId = randomUUID();
-        const accepted_ = att.inspected !== null;
+        let accepted_ = att.inspected !== null;
+
+        // 2026-07-13 audit F4 — same shared budget as the upload route
+        // (both feed the same OCR/LLM pipeline). Checked before the
+        // dedup lookup / documents insert / job enqueue for any
+        // attachment that otherwise passed file-safety — a resend of
+        // already-processed content costs one rate-limit unit it
+        // didn't strictly need to, but keeping the check unconditional
+        // (rather than only for genuinely-new content) is the simpler,
+        // more conservative rule, and content resends are rare.
+        let rateLimitReason: string | null = null;
+        if (accepted_) {
+          const rateLimit = await checkIngestRateLimit(tx, resolution.organizationId);
+          if (!rateLimit.allowed) {
+            accepted_ = false;
+            rateLimited += 1;
+            rateLimitReason = `org ingest rate limit exceeded (${rateLimit.limit}/${rateLimit.windowMinutes}min)`;
+          }
+        }
 
         // Always record the attachment so audit + DLQ telemetry has it.
         await tx.insert(emailAttachments).values({
@@ -169,11 +189,11 @@ export async function ingestEmlMessage(input: IngestInput): Promise<IngestResult
           sniffedMimeType: att.inspected?.mimeType ?? null,
           storageKey: accepted_
             ? "" // Filled in below once we know the documentId.
-            : `(rejected:${att.rejectionCode ?? "unknown"})`,
+            : `(rejected:${rateLimitReason ? "rate_limited" : att.rejectionCode ?? "unknown"})`,
           fileSizeBytes: att.inspected?.byteSize ?? att.bytes.length,
           contentHash: att.inspected?.contentHash ?? null,
           status: accepted_ ? "accepted" : "rejected",
-          rejectionReason: att.rejectionReason,
+          rejectionReason: rateLimitReason ?? att.rejectionReason,
         });
 
         if (!accepted_) continue;
@@ -259,6 +279,7 @@ export async function ingestEmlMessage(input: IngestInput): Promise<IngestResult
           subject: parsed.subject?.slice(0, 200) ?? null,
           attachmentCount: parsed.attachments.length,
           acceptedCount: accepted,
+          rateLimitedCount: rateLimited,
         },
       });
     });

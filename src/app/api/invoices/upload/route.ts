@@ -4,11 +4,13 @@
  * Pipeline:
  *   1. Auth (Auth.js session).
  *   2. RBAC: invoice.upload permission required.
- *   3. Idempotency check (§4.6).
- *   4. File-safety gate (§2.6): size, MIME sniff, AV, qpdf sanitize.
- *   5. Object storage write.
- *   6. INSERT documents (org-scoped via withOrg → RLS enforced).
- *   7. Cache response on Idempotency-Key.
+ *   3. Per-org ingest rate limit (2026-07-13 audit F4) — checked before
+ *      any expensive work so a flood is rejected cheaply.
+ *   4. Idempotency check (§4.6).
+ *   5. File-safety gate (§2.6): size, MIME sniff, AV, qpdf sanitize.
+ *   6. Object storage write.
+ *   7. INSERT documents (org-scoped via withOrg → RLS enforced).
+ *   8. Cache response on Idempotency-Key.
  *
  * OCR / LLM extraction lands in Phase 2 — for now status stays `received`.
  */
@@ -24,6 +26,7 @@ import {
   ALLOWED_MIME_TYPES,
   MAX_FILE_BYTES,
 } from "@/lib/file-safety";
+import { checkIngestRateLimit } from "@/lib/security/ingest-rate-limit";
 import { storage, documentStorageKey } from "@/lib/storage";
 import {
   hashRequest,
@@ -53,6 +56,28 @@ export async function POST(req: Request) {
     return NextResponse.json(
       { error: (err as Error).message },
       { status: (err as { status?: number }).status ?? 403 },
+    );
+  }
+
+  // Checked before touching the request body — a flooding org (or an
+  // attacker who has learned the org's inbox slug, see F11) gets
+  // rejected cheaply, before AV scan / sanitize / storage / OCR / LLM
+  // work would otherwise run for every one of their files.
+  const rateLimit = await withOrg(organizationId, (tx) =>
+    checkIngestRateLimit(tx, organizationId),
+  );
+  if (!rateLimit.allowed) {
+    return NextResponse.json(
+      {
+        error: "rate_limited",
+        message: `Upload rate limit exceeded: ${rateLimit.limit} documents per ${rateLimit.windowMinutes} minutes.`,
+        limit: rateLimit.limit,
+        windowMinutes: rateLimit.windowMinutes,
+      },
+      {
+        status: 429,
+        headers: { "Retry-After": String(rateLimit.windowMinutes * 60) },
+      },
     );
   }
 
