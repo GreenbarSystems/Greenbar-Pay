@@ -42,6 +42,14 @@ COPY package.json tsconfig.json tsconfig.worker.json ./
 COPY src/db ./src/db
 COPY src/jobs ./src/jobs
 COPY src/lib ./src/lib
+# src/modules (shared/validation/vendors) is imported by several job
+# handlers (extractContractData, recomputeVendorProfile,
+# validateExtractedInvoice, generateBriefingCard) and by
+# src/lib/coaching/compute.ts -- without it the worker crashes at boot
+# with ERR_MODULE_NOT_FOUND on '@/modules/...' (pre-existing bug,
+# unrelated to F5/F6, caught by adding a real docker build + boot smoke
+# test to CI as part of this PR's verification work).
+COPY src/modules ./src/modules
 COPY scripts ./scripts
 
 # F5 fix (2026-07-12 security audit): don't run as root. This image
