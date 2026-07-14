@@ -18,6 +18,7 @@ import {
 import { matchVendor } from "../../domain/vendor-matching";
 import { isRateDrift, scoreLine } from "../../domain/line-scoring";
 import { scoreLineAgainstContract } from "../../domain/contract-scoring";
+import { detectRemitToDrift, type RemitToDriftResult, type RemitToInfo } from "../../domain/remit-drift";
 import { itemKeyword } from "@/modules/shared/kernel/item-keyword";
 import type {
   DocumentRepository,
@@ -101,8 +102,10 @@ export async function runInvoiceValidation(
 
   // 4b. Phase 9 — D3 + F06: score each line against vendor pricing
   // history. 4c. Phase 9.5 PR3 — score against the active contract.
-  // Neither depends on the other — run in parallel.
-  const [lineScores, contractScores] = await Promise.all([
+  // 4d. 2026-07-13 audit F7 — compare remit-to against this vendor's
+  // last approved invoice. None of the three depends on the others —
+  // run in parallel.
+  const [lineScores, contractScores, remitToDrift] = await Promise.all([
     scoreLinesAgainstVendorHistory(
       tx,
       deps,
@@ -125,6 +128,15 @@ export async function runInvoiceValidation(
         unitPrice: l.unitPrice === null ? null : Number(l.unitPrice),
         currency: invoice.currency,
       })),
+    ),
+    checkRemitToDrift(
+      tx,
+      deps,
+      args.organizationId,
+      args.extractedInvoiceId,
+      vm.vendorId,
+      invoice.vendorName,
+      { remitToName: invoice.remitToName, remitToAddress: invoice.remitToAddress },
     ),
   ]);
 
@@ -169,6 +181,23 @@ export async function runInvoiceValidation(
   // prompt / risk score consumers as just more entries.
   if (contractScores.findings.length > 0) {
     findings.push(...contractScores.findings);
+  }
+
+  // 2026-07-13 audit F7 — defense-in-depth against prompt-injected or
+  // otherwise fraudulent remit-to fields. See domain/remit-drift.ts.
+  if (remitToDrift.changed) {
+    findings.push({
+      code: "remit_to_changed",
+      severity: "warning",
+      message:
+        "Remit-to name/address differs from this vendor's most recently approved invoice.",
+      context: {
+        priorRemitToName: remitToDrift.priorRemitToName,
+        priorRemitToAddress: remitToDrift.priorRemitToAddress,
+        currentRemitToName: invoice.remitToName,
+        currentRemitToAddress: invoice.remitToAddress,
+      },
+    });
   }
 
   // 5b. PR12 C4 — snapshot prior line-confidence values, write the new
@@ -375,6 +404,35 @@ async function scoreLinesAgainstVendorHistory(
   }
 
   return { findings, persistUpdates };
+}
+
+/**
+ * 2026-07-13 audit F7 — only look up a drift baseline once the vendor
+ * matcher has resolved a real vendor (vm.vendorId !== null); a low/no
+ * match means there's no reliable "this vendor's history" to compare
+ * against in the first place. detectRemitToDrift itself is null-safe
+ * (no prior invoice → never "changed"), so this only adds the "don't
+ * even query" short-circuit for the no-vendor-match case.
+ */
+async function checkRemitToDrift(
+  tx: Tx,
+  deps: RunInvoiceValidationDeps,
+  organizationId: string,
+  extractedInvoiceId: string,
+  vendorId: string | null,
+  vendorName: string | null,
+  current: RemitToInfo,
+): Promise<RemitToDriftResult> {
+  if (!vendorId || !vendorName) {
+    return { changed: false, priorRemitToName: null, priorRemitToAddress: null };
+  }
+  const prior = await deps.invoiceRepository.findLatestApprovedRemitTo(
+    tx,
+    organizationId,
+    vendorName,
+    extractedInvoiceId,
+  );
+  return detectRemitToDrift(current, prior);
 }
 
 /**

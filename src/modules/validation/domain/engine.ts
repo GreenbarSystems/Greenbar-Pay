@@ -41,7 +41,13 @@ export type FindingCode =
   //   blocking — above contract by > CONTRACT_BLOCKING_OVERAGE
   | "within_contract_rate"
   | "above_contract_rate"
-  | "severely_above_contract_rate";
+  | "severely_above_contract_rate"
+  // 2026-07-13 audit F7 — the vendor's remit-to name/address changed
+  // from their most recently approved invoice. See
+  // src/modules/validation/domain/remit-drift.ts. Warning, not
+  // blocking — vendors legitimately change bank details; the point is
+  // to put it in front of a reviewer, not auto-reject it.
+  | "remit_to_changed";
 
 export interface ValidationFinding {
   code: FindingCode;

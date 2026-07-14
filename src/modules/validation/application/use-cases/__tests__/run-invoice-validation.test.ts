@@ -248,4 +248,69 @@ describe("runInvoiceValidation", () => {
     expect(line.confidenceScore).toBe("new");
     expect(line.updatedAt).not.toBeNull();
   });
+
+  // 2026-07-13 audit F7 — remit-to drift defense-in-depth.
+  it("remit-to changed from vendor's last approved invoice: remit_to_changed warning fires", async () => {
+    const { invoice: priorInvoice } = await seedInvoice({
+      remitToName: "Acme Supplies LLC",
+      remitToAddress: "100 Main St, Springfield, IL",
+    });
+    // Simulate a completed review: approved + reviewedAt set, so this
+    // invoice becomes the drift baseline for the next one.
+    await adminDb
+      .update(extractedInvoices)
+      .set({ reviewStatus: "approved", reviewedAt: new Date() })
+      .where(eq(extractedInvoices.id, priorInvoice.id));
+
+    const { invoice, documentId } = await seedInvoice({
+      remitToName: "Acme Supplies Holdings",
+      remitToAddress: "500 Fraud Ave, Nowhere, XX",
+    });
+
+    const result = await userDb.transaction(async (tx) => {
+      await tx.execute(sql`select set_config('app.current_org_id', ${orgId}, true)`);
+      return runInvoiceValidation(tx, deps, {
+        organizationId: orgId,
+        extractedInvoiceId: invoice.id,
+        documentId,
+      });
+    });
+
+    const finding = result.findings.find((f) => f.code === "remit_to_changed");
+    expect(finding).toBeDefined();
+    expect(finding?.severity).toBe("warning");
+    expect(finding?.context).toMatchObject({
+      priorRemitToName: "Acme Supplies LLC",
+      priorRemitToAddress: "100 Main St, Springfield, IL",
+      currentRemitToName: "Acme Supplies Holdings",
+      currentRemitToAddress: "500 Fraud Ave, Nowhere, XX",
+    });
+  });
+
+  it("remit-to unchanged from vendor's last approved invoice: no remit_to_changed warning", async () => {
+    const { invoice: priorInvoice } = await seedInvoice({
+      remitToName: "Acme Supplies LLC",
+      remitToAddress: "100 Main St, Springfield, IL",
+    });
+    await adminDb
+      .update(extractedInvoices)
+      .set({ reviewStatus: "approved", reviewedAt: new Date() })
+      .where(eq(extractedInvoices.id, priorInvoice.id));
+
+    const { invoice, documentId } = await seedInvoice({
+      remitToName: "Acme Supplies LLC",
+      remitToAddress: "100 Main St, Springfield, IL",
+    });
+
+    const result = await userDb.transaction(async (tx) => {
+      await tx.execute(sql`select set_config('app.current_org_id', ${orgId}, true)`);
+      return runInvoiceValidation(tx, deps, {
+        organizationId: orgId,
+        extractedInvoiceId: invoice.id,
+        documentId,
+      });
+    });
+
+    expect(result.findings.find((f) => f.code === "remit_to_changed")).toBeUndefined();
+  });
 });
