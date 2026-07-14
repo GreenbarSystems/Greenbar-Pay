@@ -50,6 +50,9 @@ export type {
   ContractScoreResult,
 } from "./domain/contract-scoring";
 
+export { detectRemitToDrift } from "./domain/remit-drift";
+export type { RemitToInfo, RemitToDriftResult } from "./domain/remit-drift";
+
 export {
   runInvoiceValidation,
 } from "./application/use-cases/run-invoice-validation.usecase";

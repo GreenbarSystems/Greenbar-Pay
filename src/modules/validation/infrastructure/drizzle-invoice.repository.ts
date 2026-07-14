@@ -2,10 +2,11 @@
  * InvoiceRepository implementation. Every query here is moved verbatim
  * from src/lib/validation/run.ts and src/jobs/validateExtractedInvoice.ts.
  */
-import { and, eq, inArray, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNotNull, sql } from "drizzle-orm";
 import type { Tx } from "@/db/client";
 import { extractedInvoiceLines, extractedInvoices } from "@/db/schema";
 import { duplicateKey } from "../domain/engine";
+import type { RemitToInfo } from "../domain/remit-drift";
 import type {
   InvoiceHeaderForValidation,
   InvoiceLineForValidation,
@@ -44,6 +45,8 @@ async function findForValidation(
       shipping: extractedInvoices.shipping,
       discount: extractedInvoices.discount,
       total: extractedInvoices.total,
+      remitToName: extractedInvoices.remitToName,
+      remitToAddress: extractedInvoices.remitToAddress,
     })
     .from(extractedInvoices)
     .where(
@@ -94,6 +97,40 @@ async function findPriorApprovedKeys(
       .filter((r) => r.vendorName && r.invoiceNumber && r.id !== excludeInvoiceId)
       .map((r) => duplicateKey(r.vendorName!, r.invoiceNumber!)),
   );
+}
+
+/**
+ * 2026-07-13 audit F7 — matched the same way F06's vendor-pricing
+ * lookup and the vendors module's history query are: normalize_vendor_text()
+ * so the functional index is used, restricted to approved/exported so a
+ * still-pending or rejected invoice never becomes the drift baseline.
+ * Ordered by reviewedAt (system-observed) rather than the extracted
+ * invoiceDate, since invoiceDate is attacker-influenced input.
+ */
+async function findLatestApprovedRemitTo(
+  tx: Tx,
+  organizationId: string,
+  vendorName: string,
+  excludeInvoiceId: string,
+): Promise<RemitToInfo | null> {
+  const [row] = await tx
+    .select({
+      remitToName: extractedInvoices.remitToName,
+      remitToAddress: extractedInvoices.remitToAddress,
+    })
+    .from(extractedInvoices)
+    .where(
+      and(
+        eq(extractedInvoices.organizationId, organizationId),
+        inArray(extractedInvoices.reviewStatus, ["approved", "exported"]),
+        sql`normalize_vendor_text(${extractedInvoices.vendorName}) = normalize_vendor_text(${vendorName})`,
+        sql`${extractedInvoices.id} != ${excludeInvoiceId}`,
+        isNotNull(extractedInvoices.reviewedAt),
+      ),
+    )
+    .orderBy(desc(extractedInvoices.reviewedAt))
+    .limit(1);
+  return row ?? null;
 }
 
 async function findLineConfidenceSnapshots(
@@ -211,6 +248,7 @@ export const drizzleInvoiceRepository: InvoiceRepository = {
   lockForValidation,
   findForValidation,
   findPriorApprovedKeys,
+  findLatestApprovedRemitTo,
   findLineConfidenceSnapshots,
   updateLineConfidenceBatch,
   findStatusForValidation,

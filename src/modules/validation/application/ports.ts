@@ -19,6 +19,7 @@ import type { Tx } from "@/db/client";
 import type { VendorCandidate } from "../domain/vendor-matching";
 import type { LinePricingStats } from "../domain/line-scoring";
 import type { ContractLineMatch } from "../domain/contract-scoring";
+import type { RemitToInfo } from "../domain/remit-drift";
 
 export interface InvoiceHeaderForValidation {
   documentType: string;
@@ -32,6 +33,9 @@ export interface InvoiceHeaderForValidation {
   shipping: string | null;
   discount: string | null;
   total: string | null;
+  /** 2026-07-13 audit F7 — used for remit-to drift detection. */
+  remitToName: string | null;
+  remitToAddress: string | null;
 }
 
 export interface InvoiceLineForValidation {
@@ -94,6 +98,20 @@ export interface InvoiceRepository {
     organizationId: string,
     excludeInvoiceId: string,
   ): Promise<Set<string>>;
+
+  /**
+   * 2026-07-13 audit F7 — the vendor's most recently APPROVED (by
+   * reviewedAt, not the untrusted extracted invoiceDate) invoice's
+   * remit-to fields, matched by normalized vendor name. Null when
+   * this vendor has no approved invoice yet — nothing to compare
+   * against, so drift can never fire on a vendor's first invoice.
+   */
+  findLatestApprovedRemitTo(
+    tx: Tx,
+    organizationId: string,
+    vendorName: string,
+    excludeInvoiceId: string,
+  ): Promise<RemitToInfo | null>;
 
   findLineConfidenceSnapshots(
     tx: Tx,
