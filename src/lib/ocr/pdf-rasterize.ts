@@ -19,6 +19,15 @@ import os from "node:os";
 export const RASTERIZE_DPI = 200; // good balance of OCR accuracy vs. file size
 export const MAX_PAGES = 50;       // §2.6
 
+// 2026-07-13 audit F15: kill the child process if it hasn't exited within
+// this window. A malicious or corrupt PDF can stall pdftoppm indefinitely;
+// without a timeout the worker thread hangs forever. Default 60 s is well
+// above any legitimate rasterization; override via PDFTOPPM_TIMEOUT_MS.
+const PDFTOPPM_TIMEOUT_MS = parseInt(
+  process.env.PDFTOPPM_TIMEOUT_MS ?? "60000",
+  10,
+);
+
 export class RasterizeError extends Error {
   readonly code: "missing_binary" | "rasterize_failed" | "too_many_pages";
   constructor(code: RasterizeError["code"], message: string) {
@@ -95,10 +104,22 @@ async function runPdftoppm(args: string[]): Promise<void> {
   return new Promise((resolve, reject) => {
     const child = spawn("pdftoppm", args, { stdio: ["ignore", "pipe", "pipe"] });
     let stderr = "";
+
+    const timer = setTimeout(() => {
+      child.kill("SIGTERM");
+      reject(
+        new RasterizeError(
+          "rasterize_failed",
+          `pdftoppm timed out after ${PDFTOPPM_TIMEOUT_MS / 1000}s`,
+        ),
+      );
+    }, PDFTOPPM_TIMEOUT_MS);
+
     child.stderr.on("data", (chunk: Buffer) => {
       stderr += chunk.toString("utf8");
     });
     child.on("error", (err) => {
+      clearTimeout(timer);
       // ENOENT here means the binary isn't on PATH. Translate so callers can
       // give a useful message instead of a cryptic spawn error.
       if ((err as NodeJS.ErrnoException).code === "ENOENT") {
@@ -113,6 +134,7 @@ async function runPdftoppm(args: string[]): Promise<void> {
       }
     });
     child.on("close", (code) => {
+      clearTimeout(timer);
       if (code === 0) resolve();
       else
         reject(
