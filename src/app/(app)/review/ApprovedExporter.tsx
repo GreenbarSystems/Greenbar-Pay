@@ -134,6 +134,7 @@ export default function ApprovedExporter({ rows }: Props) {
                 <td className="px-4 py-2 text-right">
                   <a
                     href={`/review/${r.id}`}
+                    aria-label={`Open invoice${r.invoiceNumber ? ` ${r.invoiceNumber}` : ""}${r.vendorName ? ` from ${r.vendorName}` : ""}`}
                     className="text-sm text-gray-700 underline hover:text-gray-900"
                   >
                     Open

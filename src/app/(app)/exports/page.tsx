@@ -103,6 +103,7 @@ export default async function ExportsPage({
                     {r.status === "completed" ? (
                       <a
                         href={`/api/ap/exports/${r.id}/download`}
+                        aria-label={`Download ${r.format.toUpperCase()} export from ${r.createdAt.toISOString().slice(0, 10)} (${r.itemCount} items)`}
                         className="text-sm font-medium text-gray-900 underline hover:text-gray-700"
                       >
                         Download

@@ -100,6 +100,7 @@ export default async function VendorsListPage({
                     <td className="px-4 py-2 text-right">
                       <Link
                         href={`/vendors/${r.id}`}
+                        aria-label={`Open vendor profile for ${r.name}`}
                         className="text-sm text-gray-700 underline hover:text-gray-900"
                       >
                         Open
