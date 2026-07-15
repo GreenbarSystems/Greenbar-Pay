@@ -26,6 +26,7 @@ import {
   type Message,
 } from "@aws-sdk/client-sqs";
 import { ingestEmlMessage } from "./ingest";
+import { parseSnsEnvelope, verifySnsSignature } from "./sns-verify";
 import { scrub } from "@/lib/llm/scrub";
 
 interface SesVerdict {
@@ -124,10 +125,44 @@ async function handleSqsMessage(
   msg: Message,
 ): Promise<void> {
   try {
-    const notification = decodeSesNotification(msg.Body ?? "");
+    // Parse the outer body once so we can both verify the SNS signature and
+    // decode the SES notification from the same parsed value.
+    let outer: unknown;
+    try {
+      outer = JSON.parse(msg.Body ?? "");
+    } catch {
+      outer = null;
+    }
+
+    if (!outer) {
+      console.warn(`[inbox] could not parse SQS message body ${msg.MessageId}`);
+      await ack(client, queueUrl, msg);
+      return;
+    }
+
+    // 2026-07-13 audit F8: verify SNS signature before trusting any message
+    // content. An attacker with SQS write access could otherwise inject
+    // fabricated notifications without needing to compromise SNS itself.
+    const envelope = parseSnsEnvelope(outer);
+    if (!envelope) {
+      console.warn(`[inbox] SQS message ${msg.MessageId} is not a recognizable SNS envelope; acking`);
+      await ack(client, queueUrl, msg);
+      return;
+    }
+    try {
+      await verifySnsSignature(envelope);
+    } catch (err) {
+      console.error(
+        `[inbox] SNS signature verification rejected message ${msg.MessageId}`,
+        scrub(err),
+      );
+      await ack(client, queueUrl, msg);
+      return;
+    }
+
+    const notification = decodeSesNotification(outer);
     if (!notification) {
-      // Malformed — ack so it doesn't bounce forever.
-      console.warn(`[inbox] could not decode SQS message ${msg.MessageId}`);
+      console.warn(`[inbox] could not decode SES notification in message ${msg.MessageId}`);
       await ack(client, queueUrl, msg);
       return;
     }
@@ -171,12 +206,13 @@ async function handleSqsMessage(
   }
 }
 
-function decodeSesNotification(body: string): SesNotification | null {
+function decodeSesNotification(outer: unknown): SesNotification | null {
   try {
-    const outer = JSON.parse(body);
+    if (!outer || typeof outer !== "object") return null;
+    const o = outer as Record<string, unknown>;
     // SES → SNS → SQS wraps the SES notification once via SNS. Unwrap.
-    if (typeof outer.Message === "string") {
-      return JSON.parse(outer.Message) as SesNotification;
+    if (typeof o["Message"] === "string") {
+      return JSON.parse(o["Message"]) as SesNotification;
     }
     return outer as SesNotification;
   } catch {

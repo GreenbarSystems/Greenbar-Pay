@@ -395,6 +395,42 @@ restricted to `reviewStatus IN ('approved', 'exported')`, ordered by
 approved invoice — drift can never fire on a vendor's first invoice,
 since there's nothing to compare against.
 
+### SNS message signature verification (2026-07-13 audit F8)
+
+`src/lib/inbox/sqs.ts`'s `handleSqsMessage` now verifies the SNS RSA
+signature on every SQS message before acting on its content. Before F8,
+the SQS consumer parsed and processed whatever appeared in the message
+body without checking that it was genuinely published by SNS — an attacker
+with SQS write access (misconfigured queue policy, SSRF, stolen SQS
+credentials) could inject a crafted message that would be processed as a
+legitimate inbound email notification.
+
+**Two steps per message (both in `src/lib/inbox/sns-verify.ts`):**
+1. **`parseSnsEnvelope`** — type-checks the outer JSON as a recognizable
+   SNS envelope (requires `Type`, `MessageId`, `TopicArn`, `Message`,
+   `Timestamp`, `SignatureVersion ∈ {"1","2"}`, `Signature`,
+   `SigningCertURL`). Messages that don't parse as an SNS envelope are
+   acked and discarded rather than processed or re-queued.
+2. **`verifySnsSignature`** — (a) validates `SigningCertURL` is HTTPS from
+   `sns.*.amazonaws.com[.cn]` (prevents an attacker supplying their own
+   certificate); (b) fetches + in-process-caches the PEM certificate
+   (SNS reuses certs for months — the cache avoids redundant fetches per
+   worker lifetime); (c) builds the canonical string per the AWS spec
+   (field order is fixed per message Type, not alphabetical); (d) verifies
+   the base64 `Signature` using SHA1 (version 1) or SHA256 (version 2).
+
+**On signature failure:** the message is acked (so it doesn't re-deliver
+and eventually DLQ-alert on a message that was never legitimate) and
+logged at `console.error` level as a security event.
+
+**Tests:** `src/lib/inbox/__tests__/sns-verify.test.ts` — 21 pure unit
+tests using `generateKeyPairSync` to produce real RSA key pairs. No DB
+required; no mocking framework needed. Tests cover: field-by-field
+`parseSnsEnvelope` validation, canonical-string format per message type,
+valid SHA1/SHA256 signatures, trusted URL enforcement, tampered message
+body detection, wrong key rejection, fabricated signatures, and cert-fetch
+errors.
+
 ### PgBouncer must be transaction-mode (not session-mode)
 
 `withOrg` sets the tenant GUC via `SET LOCAL app.current_org_id = $1`
