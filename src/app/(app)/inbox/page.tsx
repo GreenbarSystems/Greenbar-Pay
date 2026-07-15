@@ -1,6 +1,7 @@
+import Link from "next/link";
 import { auth } from "@/lib/auth";
 import { withOrg } from "@/db/client";
-import { documents, documentExtractions } from "@/db/schema";
+import { documents, documentExtractions, extractedInvoices } from "@/db/schema";
 import { desc, eq, and, sql } from "drizzle-orm";
 
 const STATUS_TABS = [
@@ -39,6 +40,18 @@ export default async function InboxPage({
       limit 1
     )`;
 
+    // Latest extracted_invoice id for this document, used to link the
+    // inbox row directly to /review/[id] once extraction has completed.
+    // NULL for documents still in early pipeline stages (received /
+    // processing / text_extracted) that have no extracted invoice yet.
+    const latestExtractedInvoiceId = sql<string | null>`(
+      select id
+      from extracted_invoices ei
+      where ei.document_id = ${documents.id}
+      order by ei.created_at desc
+      limit 1
+    )`;
+
     return tx
       .select({
         id: documents.id,
@@ -49,6 +62,7 @@ export default async function InboxPage({
         extractionMethod: sql<string | null>`(${latestExtraction}).method`,
         textLength: sql<number | null>`(${latestExtraction}).text_length`,
         qualityScore: sql<string | null>`(${latestExtraction}).quality_score`,
+        extractedInvoiceId: latestExtractedInvoiceId,
       })
       .from(documents)
       .where(
@@ -108,6 +122,7 @@ export default async function InboxPage({
                 <th className="px-4 py-2 text-left">Status</th>
                 <th className="px-4 py-2 text-left">Extraction</th>
                 <th className="px-4 py-2 text-left">Received</th>
+                <th className="px-4 py-2"></th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
@@ -127,6 +142,19 @@ export default async function InboxPage({
                   </td>
                   <td className="px-4 py-2 text-gray-600">
                     {r.receivedAt.toISOString().slice(0, 16).replace("T", " ")}
+                  </td>
+                  <td className="px-4 py-2 text-right">
+                    {r.extractedInvoiceId ? (
+                      <Link
+                        href={`/review/${r.extractedInvoiceId}`}
+                        aria-label={`Open review for ${r.filename}`}
+                        className="text-sm text-gray-700 underline hover:text-gray-900"
+                      >
+                        Open
+                      </Link>
+                    ) : (
+                      <span className="text-xs text-gray-400">—</span>
+                    )}
                   </td>
                 </tr>
               ))}
