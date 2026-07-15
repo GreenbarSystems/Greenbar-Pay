@@ -5,6 +5,7 @@
  * aliases, derived stats, pricing history, terms-drift flag, duplicate
  * count, recent recompute events.
  */
+import Link from "next/link";
 import { notFound } from "next/navigation";
 import { auth } from "@/lib/auth";
 import { can } from "@/lib/rbac";
@@ -54,7 +55,18 @@ export default async function VendorDetailPage({
   const ready = isVendorProfileReady(vendor.invoiceCount);
 
   return (
-    <div className="space-y-6">
+    <>
+      <nav
+        aria-label="Breadcrumb"
+        className="mb-5 flex items-center gap-2 text-sm text-gray-500"
+      >
+        <Link href="/vendors" className="hover:text-gray-900">
+          Vendors
+        </Link>
+        <span aria-hidden="true">/</span>
+        <span className="text-gray-900">{vendor.name}</span>
+      </nav>
+      <div className="space-y-6">
       <div>
         <h1 className="text-2xl font-semibold">{vendor.name}</h1>
         {vendor.aliases.length > 0 && (
@@ -197,7 +209,11 @@ export default async function VendorDetailPage({
                   <td className="px-3 py-1.5 text-right font-mono text-gray-900">{r.total ?? "—"}</td>
                   <td className="px-3 py-1.5 text-gray-700">{r.reviewStatus}</td>
                   <td className="px-3 py-1.5 text-right">
-                    <a className="text-xs underline text-gray-700 hover:text-gray-900" href={`/review/${r.id}`}>
+                    <a
+                      href={`/review/${r.id}`}
+                      aria-label={`Open invoice${r.invoiceNumber ? ` ${r.invoiceNumber}` : ""} from ${vendor.name}`}
+                      className="text-xs underline text-gray-700 hover:text-gray-900"
+                    >
                       Open
                     </a>
                   </td>
@@ -224,6 +240,7 @@ export default async function VendorDetailPage({
         </ul>
       </details>
     </div>
+    </>
   );
 }
 

@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { notFound } from "next/navigation";
 import { auth } from "@/lib/auth";
 import { withOrg } from "@/db/client";
@@ -229,7 +230,22 @@ export default async function ReviewDetailPage({
   const canOverride = can(data.composedRole, "invoice.override");
 
   return (
-    <ReviewDetailClient
+    <>
+      <nav
+        aria-label="Breadcrumb"
+        className="mb-5 flex items-center gap-2 text-sm text-gray-500"
+      >
+        <Link href="/review" className="hover:text-gray-900">
+          Review Queue
+        </Link>
+        <span aria-hidden="true">/</span>
+        <span className="text-gray-900">
+          {data.invoice.invoiceNumber
+            ? `Invoice ${data.invoice.invoiceNumber}`
+            : "Invoice detail"}
+        </span>
+      </nav>
+      <ReviewDetailClient
       role={role}
       canOverride={canOverride}
       fileUrl={fileUrl}
@@ -415,6 +431,7 @@ export default async function ReviewDetailPage({
         actorType: a.actorType,
         createdAt: a.createdAt.toISOString(),
       }))}
-    />
+      />
+    </>
   );
 }
