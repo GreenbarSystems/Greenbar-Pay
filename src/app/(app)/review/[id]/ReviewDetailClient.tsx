@@ -879,8 +879,6 @@ function OverrideBanner({
 interface ApproverOption {
   id: string;
   name: string | null;
-  email: string;
-  role: string;
 }
 
 /**
@@ -1044,7 +1042,7 @@ function OverrideModal({
                   <option value="">— None —</option>
                   {approvers.map((a) => (
                     <option key={a.id} value={a.id}>
-                      {a.name ?? a.email} ({a.role})
+                      {a.name ?? "(unnamed)"}
                     </option>
                   ))}
                 </select>
@@ -1086,7 +1084,7 @@ function OverrideModal({
                 </p>
                 <p className="mt-1 text-sm text-gray-900">
                   {selectedApprover
-                    ? `${selectedApprover.name ?? selectedApprover.email} (${selectedApprover.role})`
+                    ? `${selectedApprover.name ?? "(unnamed)"}`
                     : "— None —"}
                 </p>
               </div>
