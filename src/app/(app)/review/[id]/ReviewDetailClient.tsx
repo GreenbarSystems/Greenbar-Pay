@@ -393,7 +393,7 @@ export default function ReviewDetailClient(props: Props) {
     {/* Phase 8 — spec §7.2: Source 40% / Extracted 30% / Briefing+Coaching 30%.
         minmax(0, …) prevents long line-item descriptions from blowing out
         the column widths. */}
-    <div className="grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,40fr)_minmax(0,30fr)_minmax(0,30fr)]">
+    <div className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,40fr)_minmax(0,30fr)_minmax(0,30fr)]">
       {/* ── Column 1: Source Document ────────────────────────────────── */}
       <div className="rounded-md border border-gray-200 bg-white p-2">
         <div className="mb-2 flex items-center justify-between px-2">
