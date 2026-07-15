@@ -28,8 +28,21 @@ const SENSITIVE_KEYS = [
   "taxId",
   "vendor_address",
   "vendorAddress",
+  "remit_to_name",
+  "remitToName",
   "remit_to_address",
   "remitToAddress",
+  // Email pipeline PII (email_messages table: fromEmail, fromName, bodyText).
+  // 2026-07-13 audit F9 — these were missing; they can surface in Postgres
+  // error messages echoing insert values, and in structured objects passed
+  // to scrub() from error catch paths.
+  "email",
+  "from_email",
+  "fromEmail",
+  "from_name",
+  "fromName",
+  "body_text",
+  "bodyText",
   // Whole-payload poison: the document text and the prompt body.
   "userText",
   "systemPrompt",
