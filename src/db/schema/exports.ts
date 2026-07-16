@@ -66,7 +66,10 @@ export const exportItems = pgTable(
     extractedInvoiceId: uuid("extracted_invoice_id")
       .notNull()
       .references(() => extractedInvoices.id),
+    /** 'included' for CSV/JSON; 'synced'/'sync_failed' for QBO/Xero. */
     status: text("status").notNull().default("included"),
+    /** QBO Bill ID or Xero Invoice ID after a successful sync. */
+    externalId: text("external_id"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => ({

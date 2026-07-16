@@ -34,6 +34,7 @@ import {
   exports as exportsTable,
   exportItems,
   extractedInvoices,
+  accountingConnections,
   auditEvents,
 } from "@/db/schema";
 import { can, loadEffectiveRole } from "@/lib/rbac";
@@ -42,7 +43,7 @@ import { getQueue, JOB } from "@/lib/queue";
 import { isMultiClientEnabled } from "@/lib/featureFlags";
 
 const BodySchema = z.object({
-  format: z.enum(["csv", "json"]),
+  format: z.enum(["csv", "json", "qbo", "xero"]),
   extractedInvoiceIds: z.array(z.string().uuid()).min(1).max(500),
   clientId: z.string().uuid().nullable().optional(),
 });
@@ -150,7 +151,31 @@ export async function POST(req: Request) {
           }
         }
 
-        // 2. Insert exports row.
+        // 2. For accounting sync formats, require an active connection.
+        if (body.format === "qbo" || body.format === "xero") {
+          const [conn] = await tx
+            .select({ id: accountingConnections.id })
+            .from(accountingConnections)
+            .where(
+              and(
+                eq(accountingConnections.organizationId, organizationId),
+                eq(accountingConnections.provider, body.format),
+                eq(accountingConnections.isActive, true),
+              ),
+            )
+            .limit(1);
+          if (!conn) {
+            return {
+              status: 422,
+              body: {
+                error: "no_accounting_connection",
+                message: `No active ${body.format.toUpperCase()} connection found. Connect via Settings > Integrations.`,
+              },
+            };
+          }
+        }
+
+        // 3. Insert exports row.
         const [exp] = await tx
           .insert(exportsTable)
           .values({
@@ -162,7 +187,7 @@ export async function POST(req: Request) {
           })
           .returning({ id: exportsTable.id });
 
-        // 3. Insert export_items.
+        // 4. Insert export_items.
         await tx.insert(exportItems).values(
           body.extractedInvoiceIds.map((id) => ({
             organizationId,
@@ -181,14 +206,28 @@ export async function POST(req: Request) {
           metadataJson: { format: body.format, itemCount: body.extractedInvoiceIds.length },
         });
 
-        // 4. Enqueue worker — outside the tx is acceptable for pg-boss since
-        // the worker is idempotent on exportId.
+        // 5. Enqueue the appropriate worker — outside the tx is acceptable for
+        // pg-boss since all workers are idempotent on exportId.
         const boss = await getQueue();
-        await boss.send(
-          JOB.exportInvoices,
-          { exportId: exp.id, organizationId },
-          { singletonKey: `export-invoices:${exp.id}` },
-        );
+        if (body.format === "qbo") {
+          await boss.send(
+            JOB.syncToQbo,
+            { exportId: exp.id, organizationId },
+            { singletonKey: `sync-to-qbo:${exp.id}` },
+          );
+        } else if (body.format === "xero") {
+          await boss.send(
+            JOB.syncToXero,
+            { exportId: exp.id, organizationId },
+            { singletonKey: `sync-to-xero:${exp.id}` },
+          );
+        } else {
+          await boss.send(
+            JOB.exportInvoices,
+            { exportId: exp.id, organizationId },
+            { singletonKey: `export-invoices:${exp.id}` },
+          );
+        }
 
         return {
           status: 201,

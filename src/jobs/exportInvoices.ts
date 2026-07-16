@@ -87,6 +87,13 @@ export async function handleExportInvoices(
     return;
   }
 
+  // The API route only dispatches export-invoices for csv/json formats;
+  // qbo/xero go to sync-to-qbo/sync-to-xero. Guard here for type safety.
+  if (claimed.format !== "csv" && claimed.format !== "json") {
+    console.warn(`[export-invoices] unexpected format=${claimed.format} for exportId=${exportId}; skipping`);
+    return;
+  }
+
   try {
     await runExport(exportId, organizationId, claimed.format);
   } catch (err) {

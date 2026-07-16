@@ -66,8 +66,8 @@ export const llmRunStatus = pgEnum("llm_run_status", [
   "non_compliant_model",
 ]);
 
-/** export.format — generic CSV/JSON ship first; ERP CSVs later. */
-export const exportFormat = pgEnum("export_format", ["csv", "json"]);
+/** export.format — file exports + accounting sync targets. */
+export const exportFormat = pgEnum("export_format", ["csv", "json", "qbo", "xero"]);
 
 /** export.status — created up-front by the API; the job advances. */
 export const exportStatus = pgEnum("export_status", [
