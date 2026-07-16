@@ -89,6 +89,9 @@ export const JOB = {
   // Hygiene — runs on a cron schedule. Keeps audit_events' RANGE
   // partitions (migration 0030) created ahead of the calendar.
   ensureAuditEventPartitions: "ensure-audit-event-partitions",
+  // Accounting integrations — push approved invoices to QBO / Xero.
+  syncToQbo: "sync-to-qbo",
+  syncToXero: "sync-to-xero",
 } as const;
 
 export type JobPayloads = {
@@ -122,4 +125,7 @@ export type JobPayloads = {
   [JOB.cleanupIdempotencyKeys]: Record<string, never>;
   // Hygiene job — no payload; cross-tenant DDL maintenance.
   [JOB.ensureAuditEventPartitions]: Record<string, never>;
+  // Accounting integrations.
+  [JOB.syncToQbo]: { exportId: string; organizationId: string };
+  [JOB.syncToXero]: { exportId: string; organizationId: string };
 };

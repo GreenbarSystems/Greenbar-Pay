@@ -26,3 +26,5 @@ export * from "./extractionCorrections";
 // LLM circuit-breaker shared state (addendum §2.7) — DB trigger sets
 // opened_at; src/lib/llm/circuit.ts reads it.
 export * from "./llmCircuitState";
+// Accounting integrations (QBO + Xero OAuth connections).
+export * from "./accountingConnections";

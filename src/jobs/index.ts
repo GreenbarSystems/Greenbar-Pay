@@ -15,6 +15,8 @@ import { handleExtractContractData } from "./extractContractData";
 import { handleCaptureAndEmbedCorrection } from "./captureAndEmbedCorrection";
 import { handleCleanupIdempotencyKeys } from "./cleanupIdempotencyKeys";
 import { handleEnsureAuditEventPartitions } from "./ensureAuditEventPartitions";
+import { handleSyncToQbo } from "./syncToQbo";
+import { handleSyncToXero } from "./syncToXero";
 
 type Handler<N extends keyof JobPayloads> = (
   job: PgBoss.Job<JobPayloads[N]>,
@@ -124,5 +126,19 @@ export const HANDLERS: Array<{
     name: JOB.ensureAuditEventPartitions,
     options: { batchSize: 1 },
     handler: handleEnsureAuditEventPartitions as Handler<keyof JobPayloads>,
+  },
+  {
+    // Accounting integrations — one invoice batch per export row;
+    // network-bound against Intuit's API. batchSize 1 per the
+    // circuit-breaker visibility principle for external API calls.
+    name: JOB.syncToQbo,
+    options: { batchSize: 1 },
+    handler: handleSyncToQbo as Handler<keyof JobPayloads>,
+  },
+  {
+    // Accounting integrations — same as syncToQbo for Xero.
+    name: JOB.syncToXero,
+    options: { batchSize: 1 },
+    handler: handleSyncToXero as Handler<keyof JobPayloads>,
   },
 ];
