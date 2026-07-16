@@ -17,6 +17,8 @@ import { handleCleanupIdempotencyKeys } from "./cleanupIdempotencyKeys";
 import { handleEnsureAuditEventPartitions } from "./ensureAuditEventPartitions";
 import { handleSyncToQbo } from "./syncToQbo";
 import { handleSyncToXero } from "./syncToXero";
+import { handleSyncToNetsuite } from "./syncToNetsuite";
+import { handleSyncToIntacct } from "./syncToIntacct";
 
 type Handler<N extends keyof JobPayloads> = (
   job: PgBoss.Job<JobPayloads[N]>,
@@ -140,5 +142,15 @@ export const HANDLERS: Array<{
     name: JOB.syncToXero,
     options: { batchSize: 1 },
     handler: handleSyncToXero as Handler<keyof JobPayloads>,
+  },
+  {
+    name: JOB.syncToNetsuite,
+    options: { batchSize: 1 },
+    handler: handleSyncToNetsuite as Handler<keyof JobPayloads>,
+  },
+  {
+    name: JOB.syncToIntacct,
+    options: { batchSize: 1 },
+    handler: handleSyncToIntacct as Handler<keyof JobPayloads>,
   },
 ];

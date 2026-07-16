@@ -43,7 +43,7 @@ import { getQueue, JOB } from "@/lib/queue";
 import { isMultiClientEnabled } from "@/lib/featureFlags";
 
 const BodySchema = z.object({
-  format: z.enum(["csv", "json", "qbo", "xero"]),
+  format: z.enum(["csv", "json", "qbo", "xero", "netsuite", "intacct"]),
   extractedInvoiceIds: z.array(z.string().uuid()).min(1).max(500),
   clientId: z.string().uuid().nullable().optional(),
 });
@@ -152,7 +152,7 @@ export async function POST(req: Request) {
         }
 
         // 2. For accounting sync formats, require an active connection.
-        if (body.format === "qbo" || body.format === "xero") {
+        if (body.format === "qbo" || body.format === "xero" || body.format === "netsuite" || body.format === "intacct") {
           const [conn] = await tx
             .select({ id: accountingConnections.id })
             .from(accountingConnections)
@@ -220,6 +220,18 @@ export async function POST(req: Request) {
             JOB.syncToXero,
             { exportId: exp.id, organizationId },
             { singletonKey: `sync-to-xero:${exp.id}` },
+          );
+        } else if (body.format === "netsuite") {
+          await boss.send(
+            JOB.syncToNetsuite,
+            { exportId: exp.id, organizationId },
+            { singletonKey: `sync-to-netsuite:${exp.id}` },
+          );
+        } else if (body.format === "intacct") {
+          await boss.send(
+            JOB.syncToIntacct,
+            { exportId: exp.id, organizationId },
+            { singletonKey: `sync-to-intacct:${exp.id}` },
           );
         } else {
           await boss.send(

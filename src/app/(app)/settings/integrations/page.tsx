@@ -45,16 +45,24 @@ export default async function IntegrationsPage({ searchParams }: PageProps) {
 
   const qboConn = connections.find((c) => c.provider === "qbo");
   const xeroConn = connections.find((c) => c.provider === "xero");
+  const netsuiteConn = connections.find((c) => c.provider === "netsuite");
+  const intacctConn = connections.find((c) => c.provider === "intacct");
 
   const qboSettings = (qboConn?.settings ?? {}) as { companyName?: string };
   const xeroSettings = (xeroConn?.settings ?? {}) as { tenantName?: string };
+  const netsuiteSettings = (netsuiteConn?.settings ?? {}) as { companyName?: string };
+  const intacctSettings = (intacctConn?.settings ?? {}) as { companyName?: string };
 
   const successMsg =
     searchParams.connected === "qbo"
       ? "QuickBooks Online connected successfully."
       : searchParams.connected === "xero"
         ? "Xero connected successfully."
-        : null;
+        : searchParams.connected === "netsuite"
+          ? "NetSuite connected successfully."
+          : searchParams.connected === "intacct"
+            ? "Sage Intacct connected successfully."
+            : null;
 
   const errorMsg = searchParams.error ? errorLabel(searchParams.error) : null;
 
@@ -95,6 +103,26 @@ export default async function IntegrationsPage({ searchParams }: PageProps) {
           connectedLabel={xeroSettings.tenantName ?? "Connected"}
           connectHref="/api/integrations/xero/connect"
           disconnectAction="/api/integrations/xero/disconnect"
+        />
+
+        <IntegrationCard
+          name="NetSuite"
+          description="Sync approved invoices as Vendor Bills in Oracle NetSuite."
+          logo={<NetsuiteLogo />}
+          isConnected={!!netsuiteConn}
+          connectedLabel={netsuiteSettings.companyName ?? "Connected"}
+          connectHref="/api/integrations/netsuite/connect"
+          disconnectAction="/api/integrations/netsuite/disconnect"
+        />
+
+        <IntegrationCard
+          name="Sage Intacct"
+          description="Sync approved invoices as AP Bills in Sage Intacct."
+          logo={<IntacctLogo />}
+          isConnected={!!intacctConn}
+          connectedLabel={intacctSettings.companyName ?? "Connected"}
+          connectHref="/settings/integrations/intacct"
+          disconnectAction="/api/integrations/intacct/disconnect"
         />
       </div>
     </div>
@@ -165,6 +193,24 @@ function XeroLogo() {
     <svg viewBox="0 0 32 32" className="h-6 w-6" aria-hidden="true">
       <rect width="32" height="32" rx="6" fill="#13B5EA" />
       <text x="16" y="22" fontSize="14" fontWeight="bold" fill="white" textAnchor="middle">X</text>
+    </svg>
+  );
+}
+
+function NetsuiteLogo() {
+  return (
+    <svg viewBox="0 0 32 32" className="h-6 w-6" aria-hidden="true">
+      <rect width="32" height="32" rx="6" fill="#CC0000" />
+      <text x="16" y="22" fontSize="14" fontWeight="bold" fill="white" textAnchor="middle">N</text>
+    </svg>
+  );
+}
+
+function IntacctLogo() {
+  return (
+    <svg viewBox="0 0 32 32" className="h-6 w-6" aria-hidden="true">
+      <rect width="32" height="32" rx="6" fill="#00A86B" />
+      <text x="16" y="22" fontSize="14" fontWeight="bold" fill="white" textAnchor="middle">SI</text>
     </svg>
   );
 }

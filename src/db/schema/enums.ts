@@ -68,7 +68,7 @@ export const llmRunStatus = pgEnum("llm_run_status", [
 ]);
 
 /** export.format — file exports + accounting sync targets. */
-export const exportFormat = pgEnum("export_format", ["csv", "json", "qbo", "xero"]);
+export const exportFormat = pgEnum("export_format", ["csv", "json", "qbo", "xero", "netsuite", "intacct"]);
 
 /** export.status — created up-front by the API; the job advances. */
 export const exportStatus = pgEnum("export_status", [
