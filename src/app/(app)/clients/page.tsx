@@ -17,7 +17,7 @@ export default async function ClientsPage() {
   if (!can(role, "clients.manage")) {
     return (
       <div className="rounded-lg border border-dashed border-gray-200 bg-white p-12 text-center text-gray-500">
-        You don't have permission to manage clients.
+        You do not have permission to manage clients.
       </div>
     );
   }

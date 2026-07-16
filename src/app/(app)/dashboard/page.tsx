@@ -162,12 +162,12 @@ export default async function DashboardPage() {
         <div className="flex items-baseline justify-between">
           <h1 className="text-xl font-semibold text-gray-900">Dashboard</h1>
           {totalPendingReview > 0 && (
-            <a
+            <Link
               href="/review"
               className="text-sm font-medium text-amber-600 hover:text-amber-700"
             >
               {totalPendingReview} invoice{totalPendingReview !== 1 ? "s" : ""} awaiting review →
-            </a>
+            </Link>
           )}
         </div>
         <p className="mt-0.5 text-xs text-gray-400">
