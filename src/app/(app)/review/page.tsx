@@ -53,7 +53,7 @@ export default async function ReviewListPage({
 
   const cursor = decodeCursor<ReviewCursor>(searchParams.cursor);
 
-  const statsRow = await withOrg(organizationId, async (tx) => {
+  const { statsRow, rows, hasNext } = await withOrg(organizationId, async (tx) => {
     const result = await tx.execute<{
       needs_review: string;
       approved_total: string;
@@ -71,10 +71,8 @@ export default async function ReviewListPage({
         where organization_id = ${organizationId}
       `,
     );
-    return result.rows[0] ?? { needs_review: "0", approved_total: "0", low_confidence: "0" };
-  });
+    const statsRow = result.rows[0] ?? { needs_review: "0", approved_total: "0", low_confidence: "0" };
 
-  const { pageRows: rows, hasNext } = await withOrg(organizationId, async (tx) => {
     // Pull the active validation_results errors via a lateral subquery.
     // PR2: append-only — filter to superseded_at IS NULL for the live row.
     const latestValidation = sql`(
@@ -147,7 +145,8 @@ export default async function ReviewListPage({
       .orderBy(desc(documents.receivedAt), desc(extractedInvoices.id))
       .limit(PAGE_SIZE + 1);
 
-    return splitPage(fetched, PAGE_SIZE);
+    const { pageRows: rows, hasNext } = splitPage(fetched, PAGE_SIZE);
+    return { statsRow, rows, hasNext };
   });
 
   const needsReview = Number(statsRow.needs_review);

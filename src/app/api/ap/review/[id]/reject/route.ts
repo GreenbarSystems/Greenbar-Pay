@@ -15,6 +15,7 @@ import { withOrg } from "@/db/client";
 import { extractedInvoices, auditEvents, documents } from "@/db/schema";
 import { can, loadEffectiveRole } from "@/lib/rbac";
 import { withIdempotency } from "@/lib/review/idempotencyWrap";
+import { checkSod } from "@/lib/review/checkSod";
 import {
   requireUuid,
   pickFields,
@@ -94,39 +95,17 @@ export async function POST(
           }
         }
 
-        // PR2 — separation of duties (review #2). Symmetric with approve.
-        // Reject is less obviously fraud-relevant than approve, but giving
-        // the uploader unilateral reject power lets a single actor
-        // suppress invoices they don't want to see — same SoD concern.
-        const [parentDoc] = await tx
-          .select({ id: documents.id, createdBy: documents.createdBy })
-          .from(documents)
-          .where(eq(documents.id, before.documentId))
-          .limit(1);
-        if (parentDoc?.createdBy && parentDoc.createdBy === userId) {
-          // PR6 — review #2 / #3 SoD denial audit. Same shape as approve;
-          // makes the control observable to an auditor.
-          await tx.insert(auditEvents).values({
-            organizationId,
-            actorType: "user",
-            actorId: userId,
-            action: "invoice.sod_denied",
-            entityType: "extracted_invoice",
-            entityId: params.id,
-            metadataJson: {
-              attemptedAction: "reject",
-              uploaderId: parentDoc.createdBy,
-            },
-          });
-          return {
-            status: 403,
-            body: {
-              error: "sod_violation",
-              message:
-                "The user who uploaded this document cannot reject it. Ask a second reviewer.",
-            },
-          };
-        }
+        // PR2 — separation of duties: the uploader cannot also reject.
+        // Symmetric with approve — giving the uploader unilateral reject
+        // power lets a single actor suppress invoices they don't want seen.
+        const { parentDoc, denial: sodDenial } = await checkSod(tx, {
+          organizationId,
+          userId,
+          documentId: before.documentId,
+          invoiceId: params.id,
+          attemptedAction: "reject",
+        });
+        if (sodDenial) return sodDenial;
 
         const [updated] = await tx
           .update(extractedInvoices)

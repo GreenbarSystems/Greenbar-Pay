@@ -42,6 +42,7 @@ import {
 import { riskBand } from "@/lib/briefing/risk-score";
 import { can, loadEffectiveRole } from "@/lib/rbac";
 import { withIdempotency } from "@/lib/review/idempotencyWrap";
+import { checkSod } from "@/lib/review/checkSod";
 import {
   requireUuid,
   pickFields,
@@ -229,44 +230,17 @@ export async function POST(
           };
         }
 
-        // PR2 — separation of duties (review #2):
-        // The user who uploaded the source document cannot also approve
-        // the resulting invoice. This is the single highest-risk gap the
-        // adversarial review flagged. Maker-checker enforced at the
-        // service layer because the RBAC role does not differentiate
-        // upload vs approve (both `reviewer` permissions).
-        const [parentDoc] = await tx
-          .select({ id: documents.id, createdBy: documents.createdBy })
-          .from(documents)
-          .where(eq(documents.id, before.documentId))
-          .limit(1);
-        if (parentDoc?.createdBy && parentDoc.createdBy === userId) {
-          // PR6 — review #2 / #3 SoD denial audit. A SOX-style auditor
-          // needs evidence the SoD control fired; a silent 403 leaves
-          // the operation invisible. Insert BEFORE the return so the
-          // event is captured in the same tx — the early return commits
-          // the audit row along with no other state change.
-          await tx.insert(auditEvents).values({
-            organizationId,
-            actorType: "user",
-            actorId: userId,
-            action: "invoice.sod_denied",
-            entityType: "extracted_invoice",
-            entityId: params.id,
-            metadataJson: {
-              attemptedAction: "approve",
-              uploaderId: parentDoc.createdBy,
-            },
-          });
-          return {
-            status: 403,
-            body: {
-              error: "sod_violation",
-              message:
-                "The user who uploaded this document cannot approve it. Ask a second reviewer.",
-            },
-          };
-        }
+        // PR2 — separation of duties: the uploader cannot also approve.
+        // checkSod loads parentDoc, audits any denial, and returns the
+        // parentDoc for use in the final audit event below.
+        const { parentDoc, denial: sodDenial } = await checkSod(tx, {
+          organizationId,
+          userId,
+          documentId: before.documentId,
+          invoiceId: params.id,
+          attemptedAction: "approve",
+        });
+        if (sodDenial) return sodDenial;
 
         // Stage-2 gate: requires invoice.final_approve (admin/owner only).
         // Reviewers can do stage-1 but cannot complete 2-stage chains.
