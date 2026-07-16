@@ -34,6 +34,8 @@ describe("LLM compliance registry", () => {
       allowsCustomerData: true,
       retentionDays: 30,
       region: "us",
+      inputCostPerMToken: 0,
+      outputCostPerMToken: 0,
     };
     try {
       expect(() => assertCompliantForInvoiceData(fake)).toThrow(
@@ -53,6 +55,8 @@ describe("LLM compliance registry", () => {
       allowsCustomerData: false,
       retentionDays: 0,
       region: "us",
+      inputCostPerMToken: 0,
+      outputCostPerMToken: 0,
     };
     try {
       expect(() => assertCompliantForInvoiceData(fake)).toThrow(
@@ -72,6 +76,8 @@ describe("LLM compliance registry", () => {
       allowsCustomerData: true,
       retentionDays: 0,
       region: "eu",
+      inputCostPerMToken: 0,
+      outputCostPerMToken: 0,
     };
     try {
       expect(() => assertCompliantForInvoiceData(fake)).toThrow(/region=eu/);

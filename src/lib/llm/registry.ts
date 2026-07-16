@@ -24,6 +24,10 @@ export interface LlmModel {
   /** Must be 0 for production traffic (§2.2). */
   retentionDays: 0 | number;
   region: ModelRegion;
+  /** USD cost per million input tokens (for estimatedCostUsd on llm_runs). */
+  inputCostPerMToken: number;
+  /** USD cost per million output tokens (for estimatedCostUsd on llm_runs). */
+  outputCostPerMToken: number;
   /** Recorded for context; not enforced. */
   notes?: string;
 }
@@ -44,6 +48,8 @@ export const MODELS: Record<string, LlmModel> = {
     allowsCustomerData: true,
     retentionDays: 0,
     region: "us",
+    inputCostPerMToken: 3.0,
+    outputCostPerMToken: 15.0,
     notes: "Primary extraction model. ZDR by default; BAA on file.",
   },
 };

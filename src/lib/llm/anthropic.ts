@@ -63,6 +63,8 @@ interface DispatchInput<T> {
 export interface DispatchOutput<T> {
   result: T;
   rawToolInput: unknown;
+  inputTokens: number;
+  outputTokens: number;
 }
 
 /**
@@ -118,5 +120,10 @@ export async function dispatchAnthropic<T>(
     );
   }
 
-  return { result: parsed.data, rawToolInput: toolUse.input };
+  return {
+    result: parsed.data,
+    rawToolInput: toolUse.input,
+    inputTokens: response.usage.input_tokens,
+    outputTokens: response.usage.output_tokens,
+  };
 }

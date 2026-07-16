@@ -172,6 +172,10 @@ async function persistOutcome(
         inputHash: "inputHash" in meta ? meta.inputHash : null,
         inputTokensEstimate:
           "inputTokensEstimate" in meta ? meta.inputTokensEstimate : null,
+        inputTokens: "inputTokens" in meta ? meta.inputTokens : null,
+        outputTokens: "outputTokens" in meta ? meta.outputTokens : null,
+        estimatedCostUsd:
+          "estimatedCostUsd" in meta ? String(meta.estimatedCostUsd) : null,
         outputJson:
           outcome.kind === "succeeded" ? scrub(outcome.result) : null,
         status: runStatus,

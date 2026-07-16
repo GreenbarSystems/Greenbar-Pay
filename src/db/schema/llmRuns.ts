@@ -6,6 +6,7 @@ import {
   jsonb,
   index,
   integer,
+  numeric,
 } from "drizzle-orm/pg-core";
 import { organizations } from "./organizations";
 import { documents } from "./documents";
@@ -37,6 +38,12 @@ export const llmRuns = pgTable(
     /** sha256 of the rendered prompt — never the prompt text itself (§2.4). */
     inputHash: text("input_hash"),
     inputTokensEstimate: integer("input_tokens_estimate"),
+    /** Actual input tokens from the provider response (null for pre-flight failures). */
+    inputTokens: integer("input_tokens"),
+    /** Actual output tokens from the provider response (null for pre-flight failures). */
+    outputTokens: integer("output_tokens"),
+    /** (inputTokens * inputCostPerMToken + outputTokens * outputCostPerMToken) / 1_000_000 */
+    estimatedCostUsd: numeric("estimated_cost_usd", { precision: 10, scale: 6 }),
     outputJson: jsonb("output_json"),
     status: llmRunStatus("status").notNull(),
     errorMessage: text("error_message"),

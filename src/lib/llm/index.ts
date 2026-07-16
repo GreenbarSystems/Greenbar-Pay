@@ -79,6 +79,12 @@ export interface PreFlightMeta {
 export interface DispatchMeta extends PreFlightMeta {
   inputHash: string;
   inputTokensEstimate: number;
+  /** Actual input tokens from the provider response. */
+  inputTokens: number;
+  /** Actual output tokens from the provider response. */
+  outputTokens: number;
+  /** Estimated cost in USD: (inputTokens * inputCostPerMToken + outputTokens * outputCostPerMToken) / 1_000_000. */
+  estimatedCostUsd: number;
   durationMs: number;
   /** Raw tool_use input only present on success. */
   rawToolInput?: unknown;
@@ -149,12 +155,15 @@ async function runDispatch<T>(args: {
     return { kind: "circuit_open", meta: baseMeta };
   }
 
-  const dispatchMeta: DispatchMeta = {
+  const baseDispatchMeta = {
     ...baseMeta,
     inputHash: args.prompt.inputHash,
     inputTokensEstimate: args.prompt.estimatedTokens,
-    durationMs: 0,
   };
+
+  const computeCost = (inputTokens: number, outputTokens: number) =>
+    (inputTokens * model.inputCostPerMToken + outputTokens * model.outputCostPerMToken) /
+    1_000_000;
 
   // ── First dispatch ────────────────────────────────────────────────────
   const t0 = now;
@@ -169,7 +178,10 @@ async function runDispatch<T>(args: {
       kind: "succeeded",
       result: out.result,
       meta: {
-        ...dispatchMeta,
+        ...baseDispatchMeta,
+        inputTokens: out.inputTokens,
+        outputTokens: out.outputTokens,
+        estimatedCostUsd: computeCost(out.inputTokens, out.outputTokens),
         durationMs: Date.now() - t0,
         rawToolInput: out.rawToolInput,
       },
@@ -193,7 +205,10 @@ async function runDispatch<T>(args: {
           kind: "succeeded",
           result: out.result,
           meta: {
-            ...dispatchMeta,
+            ...baseDispatchMeta,
+            inputTokens: out.inputTokens,
+            outputTokens: out.outputTokens,
+            estimatedCostUsd: computeCost(out.inputTokens, out.outputTokens),
             durationMs: Date.now() - t0,
             rawToolInput: out.rawToolInput,
           },
@@ -204,13 +219,25 @@ async function runDispatch<T>(args: {
           return {
             kind: "schema_failed",
             error: retryErr,
-            meta: { ...dispatchMeta, durationMs: Date.now() - t0 },
+            meta: {
+              ...baseDispatchMeta,
+              inputTokens: 0,
+              outputTokens: 0,
+              estimatedCostUsd: 0,
+              durationMs: Date.now() - t0,
+            },
           };
         }
         return {
           kind: "provider_error",
           error: retryErr as ProviderError,
-          meta: { ...dispatchMeta, durationMs: Date.now() - t1 },
+          meta: {
+            ...baseDispatchMeta,
+            inputTokens: 0,
+            outputTokens: 0,
+            estimatedCostUsd: 0,
+            durationMs: Date.now() - t1,
+          },
         };
       }
     }
@@ -219,7 +246,13 @@ async function runDispatch<T>(args: {
       return {
         kind: "provider_error",
         error: err,
-        meta: { ...dispatchMeta, durationMs: Date.now() - t0 },
+        meta: {
+          ...baseDispatchMeta,
+          inputTokens: 0,
+          outputTokens: 0,
+          estimatedCostUsd: 0,
+          durationMs: Date.now() - t0,
+        },
       };
     }
     throw err;
