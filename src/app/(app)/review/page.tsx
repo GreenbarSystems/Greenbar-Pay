@@ -14,6 +14,7 @@ import { decodeCursor, encodeCursor, splitPage } from "@/lib/pagination";
 const STATUS_TABS = [
   { key: "needs_review", label: "Needs Review" },
   { key: "pending", label: "Pending" },
+  { key: "pending_final_approval", label: "Awaiting Final" },
   { key: "approved", label: "Approved" },
   { key: "exported", label: "Exported" },
   { key: "rejected", label: "Rejected" },
@@ -24,7 +25,11 @@ type Status = (typeof STATUS_TABS)[number]["key"];
 
 // Drizzle's inArray expects a mutable array; `as const` would type
 // this as readonly and fail the overload check.
-const ACTIVE_REVIEW: Array<"pending" | "needs_review"> = ["pending", "needs_review"];
+const ACTIVE_REVIEW: Array<"pending" | "needs_review" | "pending_final_approval"> = [
+  "pending",
+  "needs_review",
+  "pending_final_approval",
+];
 
 const PAGE_SIZE = 100;
 
@@ -56,11 +61,11 @@ export default async function ReviewListPage({
     }>(
       sql`
         select
-          count(*) filter (where review_status in ('pending', 'needs_review')) as needs_review,
+          count(*) filter (where review_status in ('pending', 'needs_review', 'pending_final_approval')) as needs_review,
           count(*) filter (where review_status in ('approved', 'exported')) as approved_total,
           count(*) filter (
             where confidence::numeric < 0.75
-              and review_status in ('pending', 'needs_review')
+              and review_status in ('pending', 'needs_review', 'pending_final_approval')
           ) as low_confidence
         from extracted_invoices
         where organization_id = ${organizationId}
@@ -309,6 +314,7 @@ function ReviewBadge({ status }: { status: string }) {
   const LABELS: Record<string, string> = {
     needs_review: "Needs review",
     pending: "Pending",
+    pending_final_approval: "Awaiting Final",
     approved: "Approved",
     exported: "Exported",
     rejected: "Rejected",
@@ -320,7 +326,9 @@ function ReviewBadge({ status }: { status: string }) {
         ? "bg-red-100 text-red-800"
         : status === "needs_review"
           ? "bg-amber-100 text-amber-800"
-          : "bg-gray-100 text-gray-600";
+          : status === "pending_final_approval"
+            ? "bg-purple-100 text-purple-800"
+            : "bg-gray-100 text-gray-600";
   return (
     <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium ${color}`}>
       {LABELS[status] ?? status}

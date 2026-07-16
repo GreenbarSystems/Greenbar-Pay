@@ -5,7 +5,7 @@ import { usePathname } from "next/navigation";
 
 type NavItem = { href: string; label: string; icon: React.ReactNode; prefix?: boolean };
 
-const GROUPS: { label: string; items: NavItem[] }[] = [
+const BASE_GROUPS: { label: string; items: NavItem[] }[] = [
   {
     label: "Overview",
     items: [
@@ -109,12 +109,32 @@ const GROUPS: { label: string; items: NavItem[] }[] = [
   },
 ];
 
-export function NavLinks() {
+const CLIENTS_ITEM: NavItem = {
+  href: "/clients",
+  label: "Clients",
+  icon: (
+    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="h-[15px] w-[15px] flex-shrink-0">
+      <path d="M10 7a3 3 0 100-6 3 3 0 000 6zM14 14a4 4 0 00-8 0" />
+      <path d="M1 14a3 3 0 016 0" strokeDasharray="2 1" />
+      <circle cx="4" cy="8" r="2" />
+    </svg>
+  ),
+  prefix: true,
+};
+
+export function NavLinks({ multiClientEnabled = false }: { multiClientEnabled?: boolean }) {
   const pathname = usePathname();
+
+  const groups = BASE_GROUPS.map((g) => {
+    if (g.label === "Records" && multiClientEnabled) {
+      return { ...g, items: [CLIENTS_ITEM, ...g.items] };
+    }
+    return g;
+  });
 
   return (
     <nav className="flex flex-col gap-0 px-2" aria-label="Main navigation">
-      {GROUPS.map((group) => (
+      {groups.map((group) => (
         <div key={group.label} className="mb-1">
           <p className="mb-0.5 mt-3 px-2 text-[10px] font-semibold uppercase tracking-widest text-gray-400">
             {group.label}

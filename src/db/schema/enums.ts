@@ -40,6 +40,7 @@ export const documentSource = pgEnum("document_source", [
 export const invoiceReviewStatus = pgEnum("invoice_review_status", [
   "pending",
   "needs_review",
+  "pending_final_approval",
   "approved",
   "rejected",
   "exported",

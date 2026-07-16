@@ -26,5 +26,10 @@ function readBoolEnv(name: string): boolean {
 }
 
 export function isMultiClientEnabled(): boolean {
-  return readBoolEnv("ENABLE_MULTI_CLIENT");
+  // Freeze lifted 2026-07-16. Multi-client is now on by default.
+  // Set ENABLE_MULTI_CLIENT=false to revert to solo mode.
+  const raw = process.env["ENABLE_MULTI_CLIENT"];
+  if (raw === undefined) return true;
+  const normalized = raw.trim().toLowerCase();
+  return !(normalized === "0" || normalized === "false" || normalized === "no" || normalized === "off");
 }

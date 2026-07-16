@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 import { auth, signOut } from "@/lib/auth";
 import { NavLinks } from "./NavLinks";
+import { isMultiClientEnabled } from "@/lib/featureFlags";
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
   const session = await auth();
@@ -31,7 +32,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
 
         {/* Nav */}
         <div className="flex-1 overflow-y-auto">
-          <NavLinks />
+          <NavLinks multiClientEnabled={isMultiClientEnabled()} />
         </div>
 
         {/* User section */}

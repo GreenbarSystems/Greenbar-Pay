@@ -21,7 +21,14 @@ export type Permission =
    * reviewer can approve clean invoices but cannot override the
    * validation gate.
    */
-  | "invoice.override";
+  | "invoice.override"
+  /**
+   * Multi-step approval — stage 2 gate. Only admin/owner can give
+   * final approval when an org has approvalStagesRequired = 2.
+   * Reviewers can advance to pending_final_approval (stage 1) but
+   * cannot complete the 2-stage chain.
+   */
+  | "invoice.final_approve";
 
 const MATRIX: Record<UserRole, ReadonlySet<Permission>> = {
   owner: new Set<Permission>([
@@ -35,6 +42,7 @@ const MATRIX: Record<UserRole, ReadonlySet<Permission>> = {
     "invoice.export",
     "invoice.read",
     "invoice.override",
+    "invoice.final_approve",
   ]),
   admin: new Set<Permission>([
     "clients.manage",
@@ -45,6 +53,7 @@ const MATRIX: Record<UserRole, ReadonlySet<Permission>> = {
     "invoice.export",
     "invoice.read",
     "invoice.override",
+    "invoice.final_approve",
   ]),
   reviewer: new Set<Permission>([
     "invoice.upload",

@@ -139,7 +139,7 @@ export async function POST(
             and(
               eq(extractedInvoices.id, params.id),
               eq(extractedInvoices.organizationId, organizationId),
-              inArray(extractedInvoices.reviewStatus, ["pending", "needs_review"]),
+              inArray(extractedInvoices.reviewStatus, ["pending", "needs_review", "pending_final_approval"]),
             ),
           )
           .returning({

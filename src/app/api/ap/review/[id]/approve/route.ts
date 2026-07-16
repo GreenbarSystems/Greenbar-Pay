@@ -35,6 +35,8 @@ import {
   briefingCards,
   llmRuns,
   invoiceOverrideLog,
+  invoiceApprovalActions,
+  organizations,
   users,
 } from "@/db/schema";
 import { riskBand } from "@/lib/briefing/risk-score";
@@ -176,6 +178,18 @@ export async function POST(
           };
         }
 
+        // Multi-step approval: load org's stage config so the route can
+        // route stage-1 (pending→pending_final_approval) vs stage-2
+        // (pending_final_approval→approved) without a client round-trip.
+        const [org] = await tx
+          .select({ approvalStagesRequired: organizations.approvalStagesRequired })
+          .from(organizations)
+          .where(eq(organizations.id, organizationId))
+          .limit(1);
+        const twoStage = (org?.approvalStagesRequired ?? 1) >= 2;
+        const isStage1 = twoStage && (before.reviewStatus === "pending" || before.reviewStatus === "needs_review");
+        const isStage2 = twoStage && before.reviewStatus === "pending_final_approval";
+
         // PR3 — per-client RBAC. If org role didn't grant, look up the
         // user's role for THIS client and compose. Per §1.5 effective
         // permission = max(orgRole, clientRole). PR14 — also resolves
@@ -254,6 +268,65 @@ export async function POST(
           };
         }
 
+        // Stage-2 gate: requires invoice.final_approve (admin/owner only).
+        // Reviewers can do stage-1 but cannot complete 2-stage chains.
+        if (isStage2 && !can(effectiveRole, "invoice.final_approve")) {
+          return {
+            status: 403,
+            body: {
+              error: "forbidden",
+              message: "Final approval requires admin or owner role.",
+            },
+          };
+        }
+
+        // Stage-1 fast path (2-stage org, invoice in pending/needs_review):
+        // advance to pending_final_approval, record the action, return early.
+        // No vendor bootstrap, no evidence packet, no downstream jobs.
+        if (isStage1) {
+          const [s1updated] = await tx
+            .update(extractedInvoices)
+            .set({ reviewStatus: "pending_final_approval" })
+            .where(
+              and(
+                eq(extractedInvoices.id, params.id),
+                eq(extractedInvoices.organizationId, organizationId),
+                inArray(extractedInvoices.reviewStatus, ["pending", "needs_review"]),
+              ),
+            )
+            .returning({ id: extractedInvoices.id });
+          if (!s1updated) {
+            return {
+              status: 409,
+              body: { error: "not_active", message: "Invoice is not in a reviewable state." },
+            };
+          }
+          await tx.insert(invoiceApprovalActions).values({
+            organizationId,
+            extractedInvoiceId: params.id,
+            stageOrder: 1,
+            actorId: userId,
+            action: "stage_approved",
+          });
+          await tx.insert(auditEvents).values({
+            organizationId,
+            actorType: "user",
+            actorId: userId,
+            action: "invoice.stage1_approved",
+            entityType: "extracted_invoice",
+            entityId: params.id,
+            metadataJson: { validationResultId: latest.id },
+          });
+          return {
+            status: 200,
+            body: {
+              extractedInvoiceId: params.id,
+              reviewStatus: "pending_final_approval",
+            },
+            enqueueRecompute: null,
+          };
+        }
+
         const [updated] = await tx
           .update(extractedInvoices)
           .set({
@@ -267,7 +340,8 @@ export async function POST(
             and(
               eq(extractedInvoices.id, params.id),
               eq(extractedInvoices.organizationId, organizationId),
-              inArray(extractedInvoices.reviewStatus, ["pending", "needs_review"]),
+              // Include pending_final_approval for 2-stage stage-2 path.
+              inArray(extractedInvoices.reviewStatus, ["pending", "needs_review", "pending_final_approval"]),
             ),
           )
           .returning({
@@ -291,6 +365,17 @@ export async function POST(
               inArray(documents.status, ["review_required", "llm_extracted"]),
             ),
           );
+
+        // For 2-stage orgs completing stage 2, record the final approval action.
+        if (isStage2) {
+          await tx.insert(invoiceApprovalActions).values({
+            organizationId,
+            extractedInvoiceId: params.id,
+            stageOrder: 2,
+            actorId: userId,
+            action: "stage_approved",
+          });
+        }
 
         // Phase 7 — D1: auto-bootstrap the vendor master + promote any
         // fuzzy-matched alias. Done inside the same tx so the audit row

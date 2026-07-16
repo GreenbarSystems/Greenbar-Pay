@@ -28,3 +28,5 @@ export * from "./extractionCorrections";
 export * from "./llmCircuitState";
 // Accounting integrations (QBO + Xero OAuth connections).
 export * from "./accountingConnections";
+// Multi-step approval workflow audit trail.
+export * from "./invoiceApprovalActions";

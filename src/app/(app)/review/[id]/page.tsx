@@ -12,6 +12,8 @@ import {
   briefingCards,
   auditEvents,
   invoiceOverrideLog,
+  invoiceApprovalActions,
+  organizations,
   users,
 } from "@/db/schema";
 import { and, desc, eq, isNull } from "drizzle-orm";
@@ -54,7 +56,7 @@ export default async function ReviewDetailPage({
     // arbitrary-looking sequence of awaits. `vendorProfile` genuinely
     // depends on `latestVendorMatch`'s result and stays a separate,
     // subsequent step.
-    const [doc, lines, latestValidation, latestVendorMatch, audits, overrideRow, briefingCard, composedRole] =
+    const [doc, lines, latestValidation, latestVendorMatch, audits, overrideRow, briefingCard, composedRole, approvalActions, org] =
       await Promise.all([
         tx
           .select()
@@ -186,6 +188,27 @@ export default async function ReviewDetailPage({
           clientId: invoice.clientId,
           orgRole: role,
         }),
+
+        // Multi-step approval: per-stage action log for the stage indicator.
+        tx
+          .select({
+            stageOrder: invoiceApprovalActions.stageOrder,
+            actorId: invoiceApprovalActions.actorId,
+            actorName: users.name,
+            createdAt: invoiceApprovalActions.createdAt,
+          })
+          .from(invoiceApprovalActions)
+          .leftJoin(users, eq(users.id, invoiceApprovalActions.actorId))
+          .where(eq(invoiceApprovalActions.extractedInvoiceId, invoice.id))
+          .orderBy(invoiceApprovalActions.stageOrder),
+
+        // Org approval stage count so the UI knows whether this is a 2-stage org.
+        tx
+          .select({ approvalStagesRequired: organizations.approvalStagesRequired })
+          .from(organizations)
+          .where(eq(organizations.id, invoice.organizationId))
+          .limit(1)
+          .then((rows) => rows[0]),
       ]);
 
     // Phase 7 — D1: pull the vendor profile snapshot for the side
@@ -212,6 +235,8 @@ export default async function ReviewDetailPage({
       audits,
       overrideRow,
       composedRole,
+      approvalActions,
+      orgApprovalStages: org?.approvalStagesRequired ?? 1,
     };
   });
 
@@ -228,6 +253,7 @@ export default async function ReviewDetailPage({
   // client receives a boolean only; never the role itself, so a
   // tampered DevTools value can't elevate.
   const canOverride = can(data.composedRole, "invoice.override");
+  const canFinalApprove = can(data.composedRole, "invoice.final_approve");
 
   return (
     <>
@@ -248,6 +274,13 @@ export default async function ReviewDetailPage({
       <ReviewDetailClient
       role={role}
       canOverride={canOverride}
+      canFinalApprove={canFinalApprove}
+      orgApprovalStages={data.orgApprovalStages}
+      approvalActions={data.approvalActions.map((a) => ({
+        stageOrder: a.stageOrder,
+        actorName: a.actorName,
+        createdAt: a.createdAt.toISOString(),
+      }))}
       fileUrl={fileUrl}
       fileMime={data.doc.mimeType ?? "application/octet-stream"}
       override={

@@ -103,6 +103,12 @@ interface OverrideMetadata {
   secondApprover: string | null;
 }
 
+interface ApprovalActionShape {
+  stageOrder: number;
+  actorName: string | null;
+  createdAt: string;
+}
+
 interface Props {
   role: UserRole;
   /**
@@ -112,6 +118,12 @@ interface Props {
    * only the boolean — so a DevTools tamper can't elevate.
    */
   canOverride: boolean;
+  /** Multi-step: whether this user can give stage-2 final approval. */
+  canFinalApprove?: boolean;
+  /** Multi-step: 1 (default) or 2 stages required for this org. */
+  orgApprovalStages?: number;
+  /** Multi-step: per-stage action log entries. */
+  approvalActions?: ApprovalActionShape[];
   /** Phase 11.2 — when this invoice was approved via override, the
    *  metadata surfaces the override badge + tooltip. Null otherwise. */
   override: OverrideMetadata | null;
@@ -199,7 +211,13 @@ const FIELD_LABEL: Record<string, string> = {
 export default function ReviewDetailClient(props: Props) {
   const router = useRouter();
   const canEdit = can(props.role, "invoice.edit");
-  const canApprove = can(props.role, "invoice.approve");
+  const baseCanApprove = can(props.role, "invoice.approve");
+  // For pending_final_approval status (stage 2 of 2-stage workflow), the
+  // server-resolved canFinalApprove gate applies instead of invoice.approve.
+  const awaitingFinalApproval = props.invoice.reviewStatus === "pending_final_approval";
+  const canApprove = awaitingFinalApproval
+    ? (props.canFinalApprove ?? false)
+    : baseCanApprove;
   const canReject = can(props.role, "invoice.reject");
 
   const [form, setForm] = useState<InvoiceShape>(props.invoice);
@@ -237,6 +255,8 @@ export default function ReviewDetailClient(props: Props) {
   }
 
   const isTerminal = ["approved", "rejected", "exported"].includes(form.reviewStatus);
+  const twoStage = (props.orgApprovalStages ?? 1) >= 2;
+  const stage1Action = props.approvalActions?.find((a) => a.stageOrder === 1);
 
   // Phase 11.2 — F02 gate. blocking findings drive the banner + button
   // swap. The approve route enforces the same gate, so a tampered DOM
@@ -373,6 +393,29 @@ export default function ReviewDetailClient(props: Props) {
 
   return (
     <>
+    {/* Multi-step approval stage indicator banner */}
+    {twoStage && awaitingFinalApproval && (
+      <div className="mb-4 flex items-start gap-3 rounded-lg border border-purple-200 bg-purple-50 px-4 py-3 text-sm text-purple-900">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="mt-0.5 h-4 w-4 flex-shrink-0 text-purple-600">
+          <circle cx="8" cy="8" r="6" />
+          <path d="M8 5v3l2 1.5" />
+        </svg>
+        <div>
+          <p className="font-medium">Awaiting final approval (stage 2 of 2)</p>
+          {stage1Action && (
+            <p className="mt-0.5 text-purple-700">
+              Stage 1 approved by {stage1Action.actorName ?? "a reviewer"} on{" "}
+              {new Date(stage1Action.createdAt).toLocaleDateString("en-US", {
+                month: "short",
+                day: "numeric",
+                year: "numeric",
+              })}
+              . {canApprove ? "You can give final approval below." : "Final approval requires admin or owner role."}
+            </p>
+          )}
+        </div>
+      </div>
+    )}
     {/* Phase 11.2 — F02 modals live as siblings to the grid so the
         backdrop covers the full viewport. State + handlers are owned
         by the parent so the modal is a controlled component. */}
@@ -582,7 +625,7 @@ export default function ReviewDetailClient(props: Props) {
                 disabled={!canApprove || isTerminal}
                 className="rounded-md bg-green-700 px-3 py-1.5 text-sm font-medium text-white hover:bg-green-800 disabled:bg-gray-400"
               >
-                Approve
+                {awaitingFinalApproval ? "Give Final Approval" : "Approve"}
               </button>
             )}
             <button
