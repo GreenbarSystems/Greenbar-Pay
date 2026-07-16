@@ -18,13 +18,6 @@
  * CLAUDE.md and the "Multi-Client Freeze" section in the README.
  */
 
-function readBoolEnv(name: string): boolean {
-  const raw = process.env[name];
-  if (raw === undefined) return false;
-  const normalized = raw.trim().toLowerCase();
-  return normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on";
-}
-
 export function isMultiClientEnabled(): boolean {
   // Freeze lifted 2026-07-16. Multi-client is now on by default.
   // Set ENABLE_MULTI_CLIENT=false to revert to solo mode.

@@ -184,7 +184,7 @@ export default async function ReviewListPage({
         {STATUS_TABS.map((t) => {
           const isActive = active === t.key;
           return (
-            <a
+            <Link
               key={t.key}
               href={`/review?status=${t.key}`}
               className={
@@ -194,7 +194,7 @@ export default async function ReviewListPage({
               }
             >
               {t.label}
-            </a>
+            </Link>
           );
         })}
       </nav>

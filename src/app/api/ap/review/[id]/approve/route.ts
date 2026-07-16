@@ -622,20 +622,24 @@ export async function POST(
         };
       });
 
+      // Acquire pg-boss once for all three post-commit enqueues. A failed
+      // acquisition silently skips all three — the approve committed and
+      // each job is idempotent, so a pg-boss outage is recoverable.
+      const boss = await getQueue().catch(() => null);
+
       // Phase 7 — D1: kick the profile recompute job once the approve
-      // committed. PR5 — review C3: wrap in try/catch so a transient
-      // pg-boss outage doesn't bleed back into the response (idempotency
-      // cache wouldn't be written, retries would 409 since status is now
-      // `approved`). The recompute job is idempotent and the next approve
-      // for any vendor will pick up a missed run, so a swallowed enqueue
-      // failure is recoverable. Failure is scrubbed-and-logged so an
+      // committed. PR5 — review C3: a transient pg-boss outage must not
+      // bleed back into the response (idempotency cache wouldn't be
+      // written, retries would 409 since status is now `approved`). The
+      // recompute job is idempotent; the next approve for any vendor will
+      // pick up a missed run. Failure is scrubbed-and-logged so an
       // operator can spot a pattern.
       if (
+        boss &&
         "enqueueRecompute" in txResult &&
         typeof txResult.enqueueRecompute === "string"
       ) {
         try {
-          const boss = await getQueue();
           await boss.send(
             JOB.recomputeVendorProfile,
             { vendorId: txResult.enqueueRecompute, organizationId },
@@ -650,13 +654,10 @@ export async function POST(
       }
 
       // Phase 11 D4 — kick the evidence-packet assemble job for every
-      // approve (override or not). Same wrap-in-try pattern as the
-      // recompute enqueue: a transient pg-boss outage shouldn't bleed
-      // into the response. The assemble job is idempotent on
+      // approve (override or not). The assemble job is idempotent on
       // (org, invoiceId), so an operator can replay manually if needed.
-      if (txResult.status === 200) {
+      if (boss && txResult.status === 200) {
         try {
-          const boss = await getQueue();
           await boss.send(
             JOB.assembleEvidencePacket,
             { extractedInvoiceId: params.id, organizationId },
@@ -674,9 +675,8 @@ export async function POST(
       // approved invoice. The job checks whether any reviewer edits
       // existed before approval; if not, it exits quickly. Same
       // fire-and-forget pattern as recomputeVendorProfile above.
-      if (txResult.status === 200) {
+      if (boss && txResult.status === 200) {
         try {
-          const boss = await getQueue();
           await boss.send(
             JOB.captureAndEmbedCorrection,
             { extractedInvoiceId: params.id, organizationId },

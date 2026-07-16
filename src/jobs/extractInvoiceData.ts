@@ -321,7 +321,7 @@ async function persistOutcome(
     // pending|needs_review tail. Records the reason on the audit row.
     const supersededRows = await tx
       .update(extractedInvoices)
-      .set({ reviewStatus: "superseded", updatedAt: new Date() })
+      .set({ reviewStatus: "superseded", updatedAt: sql`now()` })
       .where(
         and(
           eq(extractedInvoices.documentId, documentId),

@@ -32,11 +32,20 @@ export async function handleValidateExtractedInvoice(
   // Phase 8 — D2: refresh the Briefing Card after every validation run.
   // The job is idempotent on extractedInvoiceId and advisory-locked,
   // so a duplicate delivery (e.g. PATCH re-validate followed by a job
-  // retry) collapses to one fresh briefing.
-  const boss = await getQueue();
-  await boss.send(
-    JOB.generateBriefingCard,
-    { extractedInvoiceId, organizationId },
-    { singletonKey: `generate-briefing-card:${extractedInvoiceId}` },
-  );
+  // retry) collapses to one fresh briefing. Wrapped in try/catch so a
+  // transient pg-boss outage doesn't fail the validation job itself —
+  // the validate committed; a missed briefing is recoverable.
+  try {
+    const boss = await getQueue();
+    await boss.send(
+      JOB.generateBriefingCard,
+      { extractedInvoiceId, organizationId },
+      { singletonKey: `generate-briefing-card:${extractedInvoiceId}` },
+    );
+  } catch (err) {
+    console.warn(
+      `[validate-extracted-invoice] generateBriefingCard enqueue failed for invoice=${extractedInvoiceId}; validation committed, briefing card will be skipped`,
+      err,
+    );
+  }
 }

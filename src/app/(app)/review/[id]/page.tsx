@@ -314,14 +314,9 @@ export default async function ReviewDetailPage({
         quantity: l.quantity,
         unitPrice: l.unitPrice,
         amount: l.amount,
-        // Phase 9 — F06. Cast TEXT → union; DB CHECK constraint
-        // restricts to the same set, so the narrow cast is sound.
-        confidenceScore: l.confidenceScore as
-          | "high"
-          | "medium"
-          | "low"
-          | "new"
-          | null,
+        confidenceScore: (["high", "medium", "low", "new"] as const).find(
+          (v) => v === l.confidenceScore,
+        ) ?? null,
         confidenceReason: l.confidenceReason,
       }))}
       findings={

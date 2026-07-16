@@ -82,7 +82,7 @@ export async function writeIdempotencyKey(
         organizationId,
         requestHash,
         responseStatus: response.status,
-        responseBody: response.body as object,
+        responseBody: response.body ?? null,
       })
       // PR2: PK is (organization_id, key); ON CONFLICT target follows.
       .onConflictDoNothing({
