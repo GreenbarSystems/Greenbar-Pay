@@ -1,0 +1,29 @@
+{
+  "documentType": "invoice",
+  "vendorName": "EuroCorp GmbH",
+  "vendorAddress": "Technologiepark 14, 80807 München, Deutschland",
+  "remitToName": "EuroCorp GmbH",
+  "remitToAddress": "IBAN: DE44 2004 1155 0534 3400 00",
+  "invoiceNumber": "EC-2026-04471",
+  "invoiceDate": "2026-06-15",
+  "dueDate": "2026-06-30",
+  "paymentTerms": "Net 15",
+  "purchaseOrderNumber": "GBP-2026-0034",
+  "currency": "EUR",
+  "subtotal": 9220.00,
+  "tax": 0.00,
+  "shipping": null,
+  "discount": null,
+  "total": 9220.00,
+  "lineItems": [
+    { "description": "API Integration Services",         "quantity": 40, "unitPrice": 185.00, "amount": 7400.00 },
+    { "description": "Technical Documentation Setup",    "quantity":  8, "unitPrice": 150.00, "amount": 1200.00 },
+    { "description": "Managed Hosting - Q3 2026 Prepay","quantity":  1, "unitPrice": 620.00, "amount":  620.00 }
+  ],
+  "warnings": [],
+  "confidence": "high",
+  "_meta": {
+    "fixture": "005-multi-currency-eur",
+    "description": "German vendor invoice in EUR — tests currency preservation, mixed German/English text, reverse-charge VAT"
+  }
+}

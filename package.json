@@ -19,6 +19,8 @@
     "test:rls": "vitest run src/db/__tests__/rls.test.ts",
     "worker": "tsx scripts/worker.ts",
     "worker:dev": "tsx watch scripts/worker.ts",
+    "benchmark": "tsx scripts/benchmark-extraction.ts",
+    "benchmark:dry-run": "tsx scripts/benchmark-extraction.ts --dry-run",
     "ingest:eml": "tsx scripts/ingest-eml.ts",
     "setup-hooks": "node scripts/setup-hooks.mjs",
     "postinstall": "node scripts/copy-pdf-worker.mjs && node scripts/setup-hooks.mjs"

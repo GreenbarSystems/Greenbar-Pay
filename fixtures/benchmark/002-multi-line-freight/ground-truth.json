@@ -1,0 +1,31 @@
+{
+  "documentType": "invoice",
+  "vendorName": "Metro Freight Co.",
+  "vendorAddress": "PO Box 7712, Chicago, IL 60601",
+  "remitToName": "Metro Freight Co.",
+  "remitToAddress": "First Midwest Bank",
+  "invoiceNumber": "8841",
+  "invoiceDate": "2026-06-18",
+  "dueDate": "2026-07-03",
+  "paymentTerms": "Net 15",
+  "purchaseOrderNumber": null,
+  "currency": "USD",
+  "subtotal": null,
+  "tax": null,
+  "shipping": null,
+  "discount": null,
+  "total": 780.00,
+  "lineItems": [
+    { "description": "LTL Freight - Chicago to Plainfield", "quantity": 1, "unitPrice": 340.00,  "amount": 340.00  },
+    { "description": "Fuel Surcharge (14.5%)",               "quantity": 1, "unitPrice":  49.30,  "amount":  49.30  },
+    { "description": "Residential Delivery Fee",             "quantity": 1, "unitPrice":  75.00,  "amount":  75.00  },
+    { "description": "Liftgate Service",                     "quantity": 1, "unitPrice":  85.00,  "amount":  85.00  },
+    { "description": "Hazmat Handling Fee (Class 3)",        "quantity": 1, "unitPrice": 230.70,  "amount": 230.70  }
+  ],
+  "warnings": [],
+  "confidence": "high",
+  "_meta": {
+    "fixture": "002-multi-line-freight",
+    "description": "Five-line freight invoice, no separate subtotal/tax rows, Net 15"
+  }
+}

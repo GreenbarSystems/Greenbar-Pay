@@ -1,0 +1,36 @@
+EuroCorp GmbH
+Technologiepark 14
+80807 München
+Deutschland
+USt-IdNr.: DE 213 456 789
+IBAN: DE44 2004 1155 0534 3400 00 | BIC: COBADEFFXXX
+
+                     RECHNUNG / INVOICE
+
+Invoice No.:      EC-2026-04471
+Invoice Date:     15. Juni 2026
+Due Date:         30. Juni 2026
+Payment Terms:    Net 15
+
+Customer:
+Greenbar Holdings Inc.
+8220 Keystone Crossing, Suite 250
+Indianapolis, IN 46240
+USA
+
+PO Reference:     GBP-2026-0034
+
+POSITION   DESCRIPTION                     MENGE   EINZELPREIS   GESAMT
+--------------------------------------------------------------------------
+001        API Integration Services           40h     €185.00    €7,400.00
+002        Technical Documentation Setup       8h     €150.00    €1,200.00
+003        Managed Hosting - Q3 2026 Prepay    1     €620.00      €620.00
+--------------------------------------------------------------------------
+
+                                    Subtotal (Netto):  €9,220.00
+                                    MwSt. / VAT 0%*:      €0.00
+                                    INVOICE TOTAL:     €9,220.00
+
+*Reverse charge applies — recipient liable for VAT under §13b UStG.
+
+Payment due by 30 June 2026. Wire transfer only.

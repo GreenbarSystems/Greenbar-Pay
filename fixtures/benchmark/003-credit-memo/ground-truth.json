@@ -1,0 +1,29 @@
+{
+  "documentType": "credit_memo",
+  "vendorName": "Office Pro Ltd",
+  "vendorAddress": "500 Office Park Boulevard, Columbus, OH 43215",
+  "remitToName": null,
+  "remitToAddress": null,
+  "invoiceNumber": "CM-2026-00391",
+  "invoiceDate": "2026-06-22",
+  "dueDate": null,
+  "paymentTerms": null,
+  "purchaseOrderNumber": null,
+  "currency": "USD",
+  "subtotal": null,
+  "tax": null,
+  "shipping": null,
+  "discount": null,
+  "total": -244.50,
+  "lineItems": [
+    { "description": "Ergonomic Office Chair, Model C3", "quantity": 2, "unitPrice": -112.25, "amount": -224.50 },
+    { "description": "Return Shipping Label Credit",      "quantity": 1, "unitPrice":  -20.00, "amount":  -20.00 }
+  ],
+  "warnings": [],
+  "confidence": "high",
+  "_meta": {
+    "fixture": "003-credit-memo",
+    "description": "Credit memo with two negative-amount line items; no due date or payment terms expected",
+    "notes": "Accept positive total (244.50) or negative (-244.50) — both reasonable interpretations of credit memos"
+  }
+}

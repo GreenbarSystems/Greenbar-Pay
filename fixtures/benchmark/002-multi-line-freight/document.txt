@@ -1,0 +1,35 @@
+METRO FREIGHT CO.
+Freight & Logistics Services
+PO Box 7712 | Chicago, IL 60601
+DOT# 1829374 | MC# 504921
+billing@metrofreight.com
+
+                            FREIGHT INVOICE
+
+Bill To:                              Ship To:
+Greenbar Holdings Inc.                Greenbar Holdings Inc.
+8220 Keystone Crossing                12 Industrial Blvd
+Suite 250                             Plainfield, IN 46168
+Indianapolis, IN 46240
+
+Invoice #:        8841
+Invoice Date:     06/18/2026
+Payment Due:      07/03/2026
+Terms:            Net 15
+
+PRO #: MF-0026-4491
+
+SERVICE DESCRIPTION                          UNITS   RATE      CHARGE
+---------------------------------------------------------------------
+LTL Freight - Chicago to Plainfield            1   $340.00    $340.00
+Fuel Surcharge (14.5%)                         1    $49.30     $49.30
+Residential Delivery Fee                       1    $75.00     $75.00
+Liftgate Service                               1    $85.00     $85.00
+Hazmat Handling Fee (Class 3)                  1   $230.70    $230.70
+
+---------------------------------------------------------------------
+                                           INVOICE TOTAL:     $780.00
+
+*Please reference invoice number 8841 on all payments.
+ACH/Wire: First Midwest Bank | Routing: 071000013 | Acct: 4489201066
+Checks payable to Metro Freight Co.

@@ -1,0 +1,31 @@
+{
+  "documentType": "invoice",
+  "vendorName": "Tri-State Equipment Rentals",
+  "vendorAddress": "2900 Airport Expressway, Fort Wayne, IN 46809",
+  "remitToName": "Tri-State Equipment Rentals",
+  "remitToAddress": "Banner Bank",
+  "invoiceNumber": "TSE-2026-1104",
+  "invoiceDate": "2026-06-20",
+  "dueDate": "2026-07-20",
+  "paymentTerms": "2/10 Net 30",
+  "purchaseOrderNumber": "PO-2026-0891",
+  "currency": "USD",
+  "subtotal": 1435.00,
+  "tax": 100.45,
+  "shipping": 0.00,
+  "discount": 28.70,
+  "total": 1506.75,
+  "lineItems": [
+    { "description": "Scissor Lift, 19ft — 5 day rental",        "quantity": 1, "unitPrice": 875.00, "amount": 875.00 },
+    { "description": "Safety Harness Kit (4-pack)",               "quantity": 1, "unitPrice": 120.00, "amount": 120.00 },
+    { "description": "Operator Safety Training (per person)",     "quantity": 2, "unitPrice":  75.00, "amount": 150.00 },
+    { "description": "Delivery & Pickup Fee",                     "quantity": 1, "unitPrice": 195.00, "amount": 195.00 },
+    { "description": "Damage Waiver (5%)",                        "quantity": 1, "unitPrice":  95.00, "amount":  95.00 }
+  ],
+  "warnings": [],
+  "confidence": "high",
+  "_meta": {
+    "fixture": "006-discount-and-po",
+    "description": "Equipment rental with PO number, early-payment discount (2/10 Net 30), and five line items"
+  }
+}

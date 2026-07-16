@@ -1,0 +1,29 @@
+{
+  "documentType": "invoice",
+  "vendorName": "ABC Supplies LLC",
+  "vendorAddress": "1400 Commerce Park Drive, Indianapolis, IN 46204",
+  "remitToName": "ABC Supplies LLC",
+  "remitToAddress": "Lockbox #44198, P.O. Box 600, Indianapolis, IN 46206",
+  "invoiceNumber": "INV-10492",
+  "invoiceDate": "2026-06-15",
+  "dueDate": "2026-07-15",
+  "paymentTerms": "Net 30",
+  "purchaseOrderNumber": null,
+  "currency": "USD",
+  "subtotal": 849.69,
+  "tax": 67.97,
+  "shipping": 35.47,
+  "discount": null,
+  "total": 953.13,
+  "lineItems": [
+    { "description": "Copy Paper, 8.5x11, 20lb, Case", "quantity": 10, "unitPrice": 42.99, "amount": 429.90 },
+    { "description": "Toner Cartridge, HP LaserJet",    "quantity":  3, "unitPrice": 89.95, "amount": 269.85 },
+    { "description": "Desk Organizer Set, Black",        "quantity":  6, "unitPrice": 24.99, "amount": 149.94 }
+  ],
+  "warnings": [],
+  "confidence": "high",
+  "_meta": {
+    "fixture": "001-simple-digital",
+    "description": "Clean digital PDF, all header fields present, three line items, USD, Net 30"
+  }
+}

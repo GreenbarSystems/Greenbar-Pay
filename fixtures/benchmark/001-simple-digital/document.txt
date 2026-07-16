@@ -1,0 +1,37 @@
+                          ABC SUPPLIES LLC
+                       1400 Commerce Park Drive
+                     Indianapolis, IN 46204
+                     Phone: (317) 555-0192
+                     EIN: 84-1234567
+
+INVOICE
+
+Invoice Number:   INV-10492
+Invoice Date:     June 15, 2026
+Due Date:         July 15, 2026
+Payment Terms:    Net 30
+
+Bill To:
+Greenbar Holdings Inc.
+8220 Keystone Crossing, Suite 250
+Indianapolis, IN 46240
+
+---------------------------------------------------------------------------
+DESCRIPTION                           QTY    UNIT PRICE        AMOUNT
+---------------------------------------------------------------------------
+Copy Paper, 8.5x11, 20lb, Case         10      $42.99         $429.90
+Toner Cartridge, HP LaserJet           3       $89.95         $269.85
+Desk Organizer Set, Black               6       $24.99         $149.94
+---------------------------------------------------------------------------
+                                                   Subtotal:   $849.69
+                                                   Sales Tax:   $67.97 (8%)
+                                                   Shipping:    $35.47
+                                                   TOTAL DUE:  $953.13
+
+Please remit payment to:
+ABC Supplies LLC
+Lockbox #44198
+P.O. Box 600
+Indianapolis, IN 46206
+
+Questions? Contact ap@abcsupplies.com

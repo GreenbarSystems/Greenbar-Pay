@@ -1,0 +1,29 @@
+OFFICE PRO LTD
+500 Office Park Boulevard
+Columbus, OH 43215
+Tel: 614-555-0177 | Fax: 614-555-0178
+
+CREDIT MEMO
+
+Credit Memo #:   CM-2026-00391
+Date:            June 22, 2026
+Original Invoice: INV-2026-9812
+Reason:          Returned merchandise — damaged on arrival
+
+Customer:
+Greenbar Holdings Inc.
+8220 Keystone Crossing, Suite 250
+Indianapolis, IN 46240
+Attn: Accounts Payable
+
+CREDIT DETAIL
+----------------------------------------------------------------------
+ITEM DESCRIPTION                   QTY   UNIT PRICE     CREDIT AMT
+----------------------------------------------------------------------
+Ergonomic Office Chair, Model C3     2     $112.25       ($224.50)
+Return Shipping Label Credit         1      $20.00        ($20.00)
+----------------------------------------------------------------------
+                                    TOTAL CREDIT:        ($244.50)
+
+This credit will be applied to your account within 5 business days.
+For questions contact customerservice@officepro.com or 614-555-0177.

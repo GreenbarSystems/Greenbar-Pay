@@ -1,0 +1,28 @@
+{
+  "documentType": "invoice",
+  "vendorName": "Apex Utilities Services Inc",
+  "vendorAddress": "4801 Energy Pkwy Ste 100, Cleveland OH 44105",
+  "remitToName": "Apex Utilities",
+  "remitToAddress": "PO Box 18844, Cleveland OH 44101",
+  "invoiceNumber": "APX-20260617",
+  "invoiceDate": "2026-06-17",
+  "dueDate": "2026-07-17",
+  "paymentTerms": "Net 30",
+  "purchaseOrderNumber": null,
+  "currency": "USD",
+  "subtotal": null,
+  "tax": null,
+  "shipping": null,
+  "discount": null,
+  "total": 500.00,
+  "lineItems": [
+    { "description": "Electric Service - May 26 - Jun 25 2026", "quantity": null, "unitPrice": null, "amount": 500.00 }
+  ],
+  "warnings": [],
+  "confidence": "low",
+  "_meta": {
+    "fixture": "004-scanned-low-quality",
+    "description": "Simulated poor OCR scan — character substitutions throughout; LLM must correct artifacts",
+    "notes": "Accept any reasonable OCR-corrected vendor name. Accept multiple line items if LLM breaks out charges individually (amount sum must equal 500.00). Confidence must be low or medium."
+  }
+}

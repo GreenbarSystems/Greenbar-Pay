@@ -1,0 +1,40 @@
+TRI-STATE EQUIPMENT RENTALS
+2900 Airport Expressway
+Fort Wayne, IN 46809
+Tel: 260-555-0411
+AP Contact: billing@tristateeq.com
+Federal ID: 35-7654321
+
+                    INVOICE
+
+Invoice Number:  TSE-2026-1104
+Invoice Date:    June 20, 2026
+Due Date:        July 20, 2026
+Payment Terms:   2/10 Net 30
+
+Bill To:
+Greenbar Holdings Inc.
+8220 Keystone Crossing, Suite 250
+Indianapolis, IN 46240
+
+Reference PO:    PO-2026-0891
+Project:         Warehouse Expansion Phase 2
+
+LINE   DESCRIPTION                          QTY   UNIT PRICE    AMOUNT
+-----------------------------------------------------------------------
+1      Scissor Lift, 19ft — 5 day rental      1    $875.00      $875.00
+2      Safety Harness Kit (4-pack)            1    $120.00      $120.00
+3      Operator Safety Training (per person)  2     $75.00      $150.00
+4      Delivery & Pickup Fee                  1    $195.00      $195.00
+5      Damage Waiver (5%)                     1     $95.00       $95.00
+-----------------------------------------------------------------------
+                                         Subtotal:            $1,435.00
+                                         Sales Tax (7%):        $100.45
+                                         Shipping:               $0.00
+                               Early Payment Discount (2%):    ($28.70)
+                                         AMOUNT DUE:          $1,506.75
+
+Early payment terms: 2% discount if paid within 10 days.
+Full amount $1,535.45 due by July 20, 2026.
+
+ACH: Banner Bank | Routing 123103716 | Account 8874002291
