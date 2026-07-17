@@ -11,7 +11,6 @@ import { and, eq } from "drizzle-orm";
 import { auth } from "@/lib/auth";
 import { withOrg } from "@/db/client";
 import { accountingConnections } from "@/db/schema";
-import { can } from "@/lib/rbac";
 import { DisconnectButton } from "./DisconnectButton";
 
 interface PageProps {
@@ -21,12 +20,7 @@ interface PageProps {
 export default async function IntegrationsPage({ searchParams }: PageProps) {
   const session = await auth();
   if (!session?.user) redirect("/");
-  const { organizationId, role } = session.user;
-
-  // Only owner + admin can manage integrations (same gate as clients.manage).
-  if (!can(role, "clients.manage")) {
-    redirect("/dashboard");
-  }
+  const { organizationId } = session.user;
 
   const connections = await withOrg(organizationId, (tx) =>
     tx
@@ -67,9 +61,9 @@ export default async function IntegrationsPage({ searchParams }: PageProps) {
   const errorMsg = searchParams.error ? errorLabel(searchParams.error) : null;
 
   return (
-    <div className="mx-auto max-w-2xl">
-      <h1 className="mb-1 text-2xl font-semibold">Integrations</h1>
-      <p className="mb-8 text-sm text-gray-500">
+    <div>
+      <h2 className="mb-1 text-base font-semibold text-gray-900">Integrations</h2>
+      <p className="mb-6 text-sm text-gray-500">
         Connect your accounting software to sync approved invoices directly as bills.
       </p>
 
@@ -84,7 +78,7 @@ export default async function IntegrationsPage({ searchParams }: PageProps) {
         </div>
       )}
 
-      <div className="space-y-4">
+      <div className="space-y-3">
         <IntegrationCard
           name="QuickBooks Online"
           description="Sync approved invoices as Bills in your QBO company."

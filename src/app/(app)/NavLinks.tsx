@@ -95,8 +95,8 @@ const BASE_GROUPS: { label: string; items: NavItem[] }[] = [
     label: "Account",
     items: [
       {
-        href: "/settings/integrations",
-        label: "Integrations",
+        href: "/settings",
+        label: "Settings",
         icon: (
           <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="h-[15px] w-[15px] flex-shrink-0">
             <circle cx="8" cy="8" r="2" />
