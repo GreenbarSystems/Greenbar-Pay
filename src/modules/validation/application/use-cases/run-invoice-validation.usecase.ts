@@ -26,6 +26,7 @@ import type {
   InvoiceRepository,
   LineConfidenceChange,
   LineConfidenceUpdate,
+  OrgSettingsRepository,
   PoRegisterRepository,
   ValidationAuditRepository,
   ValidationResultsRepository,
@@ -44,6 +45,8 @@ export interface RunInvoiceValidationDeps {
   auditRepository: ValidationAuditRepository;
   /** Optional — PO matching only runs when this is provided. */
   poRepository?: PoRegisterRepository;
+  /** Optional — loads per-org 3-way toggle; falls back to PO_THREE_WAY_ENABLED env var when absent. */
+  orgSettingsRepository?: OrgSettingsRepository;
 }
 
 export interface RunInvoiceValidationArgs {
@@ -552,9 +555,9 @@ async function scoreLinesAgainstActiveContract(
  * PO matching — load the PO from the register (if a number was extracted)
  * and run the pure matchAgainstPo domain function.
  *
- * `PO_THREE_WAY_ENABLED` env var enables 3-way mode (receipt confirmation +
- * line quantity checks). Default off; set to "true" to enable. Per-org
- * toggling is phase-2 work (no per-org config store in the worker today).
+ * Per-org `poThreeWayEnabled` (organizations table) controls 3-way mode.
+ * The global `PO_THREE_WAY_ENABLED` env var overrides the per-org setting
+ * when set to "true" (deploy-level override; useful for testing or staged rollout).
  */
 async function runPoMatch(
   tx: Tx,
@@ -562,7 +565,12 @@ async function runPoMatch(
   organizationId: string,
   invoice: { purchaseOrderNumber: string | null; total: string | null },
 ): Promise<PoMatchOutput> {
-  const threeWayEnabled = process.env.PO_THREE_WAY_ENABLED === "true";
+  const envOverride = process.env.PO_THREE_WAY_ENABLED === "true";
+  const threeWayEnabled =
+    envOverride ||
+    (deps.orgSettingsRepository
+      ? await deps.orgSettingsRepository.findPoThreeWayEnabled(tx, organizationId)
+      : false);
   const poNumber = invoice.purchaseOrderNumber;
 
   if (!poNumber || !deps.poRepository) {

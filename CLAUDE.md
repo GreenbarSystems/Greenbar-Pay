@@ -714,11 +714,11 @@ independently to `po_match_results` (for receipt confirmation and CSV export).
 
 **2-way** (default): checks that the PO number on the invoice matches a `purchase_orders` row and that the invoice total is within `PO_AMOUNT_TOLERANCE` (2%) of the PO total. Active when `purchase_order_number` is set on the extracted invoice AND `poRepository` is wired into the validation module (it is, by default).
 
-**3-way** (opt-in): additionally requires `receipt_confirmed_at IS NOT NULL` on the PO and warns when any line's `received_quantity < quantity`. Enabled by `PO_THREE_WAY_ENABLED=true`. Per-org toggle is phase-2 work — the validation job has no per-org config store today.
+**3-way** (opt-in): additionally requires `receipt_confirmed_at IS NOT NULL` on the PO and warns when any line's `received_quantity < quantity`. Controlled per-org via `organizations.po_three_way_enabled` (toggled via `PATCH /api/ap/settings/po`). The global `PO_THREE_WAY_ENABLED=true` env var overrides the per-org setting (deploy-level override / staged rollout).
 
 **`po_match_results`** is append-only with `superseded_at` (same pattern as `validation_results`). The unique partial index `idx_po_match_results_active` enforces at most one active row per invoice. A re-validation supersedes the prior row and inserts a fresh one.
 
-**Receipt confirmation** (`po.confirm_receipt` permission) requires a separate API route (not yet built — the table and permission are in place). For now, set `receipt_confirmed_at` directly in the DB or via a future PATCH /api/po/:id/confirm-receipt route.
+**Receipt confirmation** (`po.confirm_receipt` permission): `PATCH /api/po/:id/confirm-receipt` — sets `receipt_confirmed_at`, `receipt_confirmed_by`, `status → "received"`. Idempotency-Key + If-Match on `updated_at`. Returns 409 if PO is already closed/cancelled or if the optimistic lock is stale.
 
 **Evidence packet**: `schemaVersion` was bumped to `"evidence.v2"` when the `poMatch` block was added to `src/lib/evidence/assemble.ts`. Existing v1 packets are unaffected (they were sealed at approval time). Auditors re-verifying a v1 packet should note it predates PO matching.
 

@@ -86,6 +86,7 @@ import { drizzleValidationResultsRepository } from "./infrastructure/drizzle-val
 import { drizzleVendorMatchWriteRepository } from "./infrastructure/drizzle-vendor-match-write.repository";
 import { drizzleValidationAuditRepository } from "./infrastructure/drizzle-validation-audit.repository";
 import { drizzlePoRepository } from "./infrastructure/drizzle-po.repository";
+import { drizzleOrgSettingsRepository } from "./infrastructure/drizzle-org.repository";
 
 /**
  * Default, Drizzle-backed dependency bundle. Callers (the PATCH route,
@@ -101,4 +102,5 @@ export const validationModule = {
   vendorMatchWriteRepository: drizzleVendorMatchWriteRepository,
   auditRepository: drizzleValidationAuditRepository,
   poRepository: drizzlePoRepository,
+  orgSettingsRepository: drizzleOrgSettingsRepository,
 };

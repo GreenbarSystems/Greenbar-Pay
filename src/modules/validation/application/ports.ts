@@ -243,6 +243,11 @@ export interface PoRegisterRepository {
   upsertMatchResult(tx: Tx, result: PoMatchResultWrite): Promise<void>;
 }
 
+export interface OrgSettingsRepository {
+  /** Returns the org's po_three_way_enabled flag. */
+  findPoThreeWayEnabled(tx: Tx, organizationId: string): Promise<boolean>;
+}
+
 export interface ValidationAuditRepository {
   recordLineConfidenceRecalculated(
     tx: Tx,
