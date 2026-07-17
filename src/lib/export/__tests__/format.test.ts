@@ -20,6 +20,8 @@ const baseRow: ExportRow = {
   document_type: "invoice",
   confidence: "high",
   approved_at: "2026-06-05T12:00:00Z",
+  po_match_status: null,
+  po_variance_pct: null,
   line_items: [],
 };
 

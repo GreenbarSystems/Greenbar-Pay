@@ -20,6 +20,7 @@ import type { VendorCandidate } from "../domain/vendor-matching";
 import type { LinePricingStats } from "../domain/line-scoring";
 import type { ContractLineMatch } from "../domain/contract-scoring";
 import type { RemitToInfo } from "../domain/remit-drift";
+import type { PoWithLines } from "../domain/po-matching";
 
 export interface InvoiceHeaderForValidation {
   documentType: string;
@@ -36,6 +37,8 @@ export interface InvoiceHeaderForValidation {
   /** 2026-07-13 audit F7 — used for remit-to drift detection. */
   remitToName: string | null;
   remitToAddress: string | null;
+  /** PO matching — 2-way / 3-way. */
+  purchaseOrderNumber: string | null;
 }
 
 export interface InvoiceLineForValidation {
@@ -219,6 +222,25 @@ export interface LineConfidenceChange {
   lineNumber: number | null;
   before: Record<string, unknown>;
   after: Record<string, unknown>;
+}
+
+export interface PoMatchResultWrite {
+  organizationId: string;
+  extractedInvoiceId: string;
+  purchaseOrderId: string | null;
+  matchType: string | null;
+  status: string;
+  invoiceTotal: string | null;
+  poTotal: string | null;
+  variancePct: string | null;
+  lineVariancesJson: unknown;
+}
+
+export interface PoRegisterRepository {
+  /** Returns null when no PO with that number exists in the org's register. */
+  findByPoNumber(tx: Tx, orgId: string, poNumber: string): Promise<PoWithLines | null>;
+  /** Soft-supersedes the prior active match result, then inserts a new one. */
+  upsertMatchResult(tx: Tx, result: PoMatchResultWrite): Promise<void>;
 }
 
 export interface ValidationAuditRepository {

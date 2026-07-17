@@ -47,7 +47,14 @@ export type FindingCode =
   // src/modules/validation/domain/remit-drift.ts. Warning, not
   // blocking — vendors legitimately change bank details; the point is
   // to put it in front of a reviewer, not auto-reject it.
-  | "remit_to_changed";
+  | "remit_to_changed"
+  // PO matching — 2-way and 3-way purchase order validation.
+  // See src/modules/validation/domain/po-matching.ts.
+  | "po_not_found"
+  | "po_amount_exceeded"
+  | "po_closed"
+  | "po_line_quantity_variance"
+  | "po_receipt_not_confirmed";
 
 export interface ValidationFinding {
   code: FindingCode;

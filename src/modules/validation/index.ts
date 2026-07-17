@@ -53,6 +53,15 @@ export type {
 export { detectRemitToDrift } from "./domain/remit-drift";
 export type { RemitToInfo, RemitToDriftResult } from "./domain/remit-drift";
 
+export { matchAgainstPo, PO_AMOUNT_TOLERANCE } from "./domain/po-matching";
+export type {
+  PoLine,
+  PoWithLines,
+  PoMatchInputs,
+  LineVariance,
+  PoMatchOutput,
+} from "./domain/po-matching";
+
 export {
   runInvoiceValidation,
 } from "./application/use-cases/run-invoice-validation.usecase";
@@ -76,6 +85,7 @@ import { drizzleDocumentRepository } from "./infrastructure/drizzle-document.rep
 import { drizzleValidationResultsRepository } from "./infrastructure/drizzle-validation-results.repository";
 import { drizzleVendorMatchWriteRepository } from "./infrastructure/drizzle-vendor-match-write.repository";
 import { drizzleValidationAuditRepository } from "./infrastructure/drizzle-validation-audit.repository";
+import { drizzlePoRepository } from "./infrastructure/drizzle-po.repository";
 
 /**
  * Default, Drizzle-backed dependency bundle. Callers (the PATCH route,
@@ -90,4 +100,5 @@ export const validationModule = {
   validationResultsRepository: drizzleValidationResultsRepository,
   vendorMatchWriteRepository: drizzleVendorMatchWriteRepository,
   auditRepository: drizzleValidationAuditRepository,
+  poRepository: drizzlePoRepository,
 };

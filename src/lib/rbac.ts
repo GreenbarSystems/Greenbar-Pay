@@ -28,7 +28,13 @@ export type Permission =
    * Reviewers can advance to pending_final_approval (stage 1) but
    * cannot complete the 2-stage chain.
    */
-  | "invoice.final_approve";
+  | "invoice.final_approve"
+  /** PO register: create / edit / delete purchase orders. */
+  | "po.manage"
+  /** PO register: read purchase orders and match results. */
+  | "po.view"
+  /** 3-way matching: confirm goods/services receipt on a PO. */
+  | "po.confirm_receipt";
 
 const MATRIX: Record<UserRole, ReadonlySet<Permission>> = {
   owner: new Set<Permission>([
@@ -43,6 +49,9 @@ const MATRIX: Record<UserRole, ReadonlySet<Permission>> = {
     "invoice.read",
     "invoice.override",
     "invoice.final_approve",
+    "po.manage",
+    "po.view",
+    "po.confirm_receipt",
   ]),
   admin: new Set<Permission>([
     "clients.manage",
@@ -54,6 +63,9 @@ const MATRIX: Record<UserRole, ReadonlySet<Permission>> = {
     "invoice.read",
     "invoice.override",
     "invoice.final_approve",
+    "po.manage",
+    "po.view",
+    "po.confirm_receipt",
   ]),
   reviewer: new Set<Permission>([
     "invoice.upload",
@@ -62,9 +74,11 @@ const MATRIX: Record<UserRole, ReadonlySet<Permission>> = {
     "invoice.reject",
     "invoice.export",
     "invoice.read",
+    "po.view",
+    "po.confirm_receipt",
   ]),
-  clerk: new Set<Permission>(["invoice.upload", "invoice.edit", "invoice.read"]),
-  viewer: new Set<Permission>(["invoice.read"]),
+  clerk: new Set<Permission>(["invoice.upload", "invoice.edit", "invoice.read", "po.view"]),
+  viewer: new Set<Permission>(["invoice.read", "po.view"]),
 };
 
 const RANK: Record<UserRole, number> = {

@@ -27,6 +27,8 @@ export const CSV_COLUMNS = [
   "document_type",
   "confidence",
   "approved_at",
+  "po_match_status",
+  "po_variance_pct",
 ] as const;
 
 export type CsvColumn = (typeof CSV_COLUMNS)[number];
@@ -50,6 +52,10 @@ export interface ExportRow {
   document_type: string;
   confidence: string | null;
   approved_at: string | null;
+  /** PO matching — null when no PO number was on the invoice. */
+  po_match_status: string | null;
+  /** Signed percentage as a decimal string, e.g. "0.0125". Null when no PO matched. */
+  po_variance_pct: string | null;
   line_items: Array<{
     line_number: number | null;
     description: string | null;

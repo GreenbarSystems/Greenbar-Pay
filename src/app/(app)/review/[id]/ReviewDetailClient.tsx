@@ -109,6 +109,15 @@ interface ApprovalActionShape {
   createdAt: string;
 }
 
+interface PoMatchShape {
+  status: string;
+  matchType: string | null;
+  purchaseOrderId: string | null;
+  invoiceTotal: string | null;
+  poTotal: string | null;
+  variancePct: string | null;
+}
+
 interface Props {
   role: UserRole;
   /**
@@ -176,6 +185,8 @@ interface Props {
     }>;
   } | null;
   audits: Audit[];
+  /** PO matching — null when no PO number was on the invoice (or match not yet run). */
+  poMatch?: PoMatchShape | null;
 }
 
 const FIELDS: Array<keyof InvoiceShape> = [
@@ -638,6 +649,16 @@ export default function ReviewDetailClient(props: Props) {
           </div>
         </div>
 
+        {/* ── PO match ────────────────────────────────────────────── */}
+        {props.poMatch && (
+          <div className="rounded-md border border-gray-200 bg-white p-4">
+            <h2 className="mb-2 text-sm font-medium text-gray-700">
+              PO match{props.poMatch.matchType ? ` (${props.poMatch.matchType})` : ""}
+            </h2>
+            <PoMatchBadge match={props.poMatch} />
+          </div>
+        )}
+
         {/* ── Validation findings ─────────────────────────────────── */}
         <div className="rounded-md border border-gray-200 bg-white p-4">
           <h2 className="mb-2 text-sm font-medium text-gray-700">Validation</h2>
@@ -864,6 +885,41 @@ export default function ReviewDetailClient(props: Props) {
       </div>
     </div>
     </>
+  );
+}
+
+const PO_STATUS_LABEL: Record<string, string> = {
+  matched: "Matched",
+  amount_exceeded: "Amount exceeded",
+  not_found: "PO not found",
+  closed: "PO closed",
+  receipt_not_confirmed: "Receipt not confirmed",
+  line_quantity_variance: "Line quantity variance",
+};
+
+function PoMatchBadge({ match }: { match: PoMatchShape }) {
+  const label = PO_STATUS_LABEL[match.status] ?? match.status;
+  const isOk = match.status === "matched" || match.status === "line_quantity_variance";
+  const colorClass = isOk
+    ? "bg-green-50 text-green-900"
+    : "bg-red-50 text-red-900";
+
+  const variancePct =
+    match.variancePct !== null
+      ? `${(Number(match.variancePct) * 100).toFixed(2)}%`
+      : null;
+
+  return (
+    <div className={`rounded px-2 py-1.5 text-xs ${colorClass}`}>
+      <div className="font-medium">{label}</div>
+      {match.poTotal && (
+        <div className="mt-0.5 font-mono text-gray-600">
+          PO total: {match.poTotal}
+          {match.invoiceTotal && ` · Invoice total: ${match.invoiceTotal}`}
+          {variancePct && ` · Δ ${variancePct}`}
+        </div>
+      )}
+    </div>
   );
 }
 

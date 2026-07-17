@@ -30,3 +30,5 @@ export * from "./llmCircuitState";
 export * from "./accountingConnections";
 // Multi-step approval workflow audit trail.
 export * from "./invoiceApprovalActions";
+// PO matching — purchase_orders, purchase_order_lines, po_match_results.
+export * from "./purchaseOrders";

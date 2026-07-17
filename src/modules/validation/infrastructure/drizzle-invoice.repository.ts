@@ -47,6 +47,7 @@ async function findForValidation(
       total: extractedInvoices.total,
       remitToName: extractedInvoices.remitToName,
       remitToAddress: extractedInvoices.remitToAddress,
+      purchaseOrderNumber: extractedInvoices.purchaseOrderNumber,
     })
     .from(extractedInvoices)
     .where(

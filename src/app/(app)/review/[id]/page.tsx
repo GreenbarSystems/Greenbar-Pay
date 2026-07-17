@@ -15,6 +15,7 @@ import {
   invoiceApprovalActions,
   organizations,
   users,
+  poMatchResults,
 } from "@/db/schema";
 import { and, desc, eq, isNull } from "drizzle-orm";
 import { storage } from "@/lib/storage";
@@ -56,7 +57,7 @@ export default async function ReviewDetailPage({
     // arbitrary-looking sequence of awaits. `vendorProfile` genuinely
     // depends on `latestVendorMatch`'s result and stays a separate,
     // subsequent step.
-    const [doc, lines, latestValidation, latestVendorMatch, audits, overrideRow, briefingCard, composedRole, approvalActions, org] =
+    const [doc, lines, latestValidation, latestVendorMatch, audits, overrideRow, briefingCard, composedRole, approvalActions, org, poMatchResult] =
       await Promise.all([
         tx
           .select()
@@ -209,6 +210,26 @@ export default async function ReviewDetailPage({
           .where(eq(organizations.id, invoice.organizationId))
           .limit(1)
           .then((rows) => rows[0]),
+
+        // PO match: the active result row (superseded_at IS NULL).
+        tx
+          .select({
+            status: poMatchResults.status,
+            matchType: poMatchResults.matchType,
+            purchaseOrderId: poMatchResults.purchaseOrderId,
+            invoiceTotal: poMatchResults.invoiceTotal,
+            poTotal: poMatchResults.poTotal,
+            variancePct: poMatchResults.variancePct,
+          })
+          .from(poMatchResults)
+          .where(
+            and(
+              eq(poMatchResults.extractedInvoiceId, invoice.id),
+              isNull(poMatchResults.supersededAt),
+            ),
+          )
+          .limit(1)
+          .then((rows) => rows[0] ?? null),
       ]);
 
     // Phase 7 — D1: pull the vendor profile snapshot for the side
@@ -237,6 +258,7 @@ export default async function ReviewDetailPage({
       composedRole,
       approvalActions,
       orgApprovalStages: org?.approvalStagesRequired ?? 1,
+      poMatchResult,
     };
   });
 
@@ -459,6 +481,18 @@ export default async function ReviewDetailPage({
         actorType: a.actorType,
         createdAt: a.createdAt.toISOString(),
       }))}
+      poMatch={
+        data.poMatchResult
+          ? {
+              status: data.poMatchResult.status,
+              matchType: data.poMatchResult.matchType,
+              purchaseOrderId: data.poMatchResult.purchaseOrderId,
+              invoiceTotal: data.poMatchResult.invoiceTotal,
+              poTotal: data.poMatchResult.poTotal,
+              variancePct: data.poMatchResult.variancePct,
+            }
+          : null
+      }
       />
     </>
   );

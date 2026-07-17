@@ -19,7 +19,7 @@
  */
 import { createHash } from "node:crypto";
 import type PgBoss from "pg-boss";
-import { and, eq, inArray, sql } from "drizzle-orm";
+import { and, eq, inArray, isNull, sql } from "drizzle-orm";
 import { withOrgAsWorker } from "@/db/client";
 import {
   exports as exportsTable,
@@ -28,6 +28,7 @@ import {
   extractedInvoiceLines,
   documents,
   auditEvents,
+  poMatchResults,
 } from "@/db/schema";
 import { storage, exportStorageKey } from "@/lib/storage";
 import { toCsv, toJson, type ExportRow } from "@/lib/export/format";
@@ -177,6 +178,27 @@ async function runExport(
       linesByInvoice.set(l.extractedInvoiceId, arr);
     }
 
+    // Pull active PO match results for all invoices in this export.
+    const poMatches =
+      invoiceIds.length > 0
+        ? await tx
+            .select({
+              extractedInvoiceId: poMatchResults.extractedInvoiceId,
+              status: poMatchResults.status,
+              variancePct: poMatchResults.variancePct,
+            })
+            .from(poMatchResults)
+            .where(
+              and(
+                inArray(poMatchResults.extractedInvoiceId, invoiceIds),
+                isNull(poMatchResults.supersededAt),
+              ),
+            )
+        : [];
+    const poMatchByInvoice = new Map(
+      poMatches.map((m) => [m.extractedInvoiceId, m]),
+    );
+
     return items.map((i): { row: ExportRow; reviewStatus: string } => ({
       reviewStatus: i.reviewStatus,
       row: {
@@ -198,6 +220,8 @@ async function runExport(
         document_type: i.documentType,
         confidence: i.confidence,
         approved_at: i.reviewedAt ? i.reviewedAt.toISOString() : null,
+        po_match_status: poMatchByInvoice.get(i.invoiceId)?.status ?? null,
+        po_variance_pct: poMatchByInvoice.get(i.invoiceId)?.variancePct ?? null,
         line_items: (linesByInvoice.get(i.invoiceId) ?? []).map((l) => ({
           line_number: l.lineNumber,
           description: l.description,

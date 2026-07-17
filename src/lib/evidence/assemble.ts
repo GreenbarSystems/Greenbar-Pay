@@ -38,6 +38,7 @@ import {
   auditEvents,
   invoiceOverrideLog,
   llmRuns,
+  poMatchResults,
 } from "@/db/schema";
 
 export interface AssembleResult {
@@ -66,7 +67,7 @@ export async function assembleEvidenceManifest(
     .limit(1);
   if (!doc) return null;
 
-  const [lines, latestValidation, latestActiveBriefing, approveEvent, overrideRow] =
+  const [lines, latestValidation, latestActiveBriefing, approveEvent, overrideRow, activePoMatch] =
     await Promise.all([
       tx
         .select()
@@ -120,6 +121,17 @@ export async function assembleEvidenceManifest(
         .orderBy(desc(invoiceOverrideLog.approvedAt))
         .limit(1)
         .then((r) => r[0]),
+      tx
+        .select()
+        .from(poMatchResults)
+        .where(
+          and(
+            eq(poMatchResults.extractedInvoiceId, extractedInvoiceId),
+            isNull(poMatchResults.supersededAt),
+          ),
+        )
+        .limit(1)
+        .then((r) => r[0] ?? null),
     ]);
 
   // PR14 C-Null-Approver — refuse to seal a packet when the approval
@@ -170,7 +182,7 @@ export async function assembleEvidenceManifest(
   }
 
   const manifest = {
-    schemaVersion: "evidence.v1",
+    schemaVersion: "evidence.v2",
     originalDocument: {
       documentId: doc.id,
       sourceChannel: doc.source ?? null,
@@ -263,6 +275,19 @@ export async function assembleEvidenceManifest(
           overrideAmount: overrideRow.overrideAmount,
           blockingFindingCodes: overrideRow.blockingFindingCodes,
           approvedAt: overrideRow.approvedAt?.toISOString() ?? null,
+        }
+      : null,
+    poMatch: activePoMatch
+      ? {
+          poMatchResultId: activePoMatch.id,
+          purchaseOrderId: activePoMatch.purchaseOrderId,
+          matchType: activePoMatch.matchType,
+          status: activePoMatch.status,
+          invoiceTotal: activePoMatch.invoiceTotal,
+          poTotal: activePoMatch.poTotal,
+          variancePct: activePoMatch.variancePct,
+          lineVariancesJson: activePoMatch.lineVariancesJson,
+          matchedAt: activePoMatch.matchedAt?.toISOString() ?? null,
         }
       : null,
   };

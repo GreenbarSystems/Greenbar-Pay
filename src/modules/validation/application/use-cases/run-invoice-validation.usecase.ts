@@ -19,12 +19,14 @@ import { matchVendor } from "../../domain/vendor-matching";
 import { isRateDrift, scoreLine } from "../../domain/line-scoring";
 import { scoreLineAgainstContract } from "../../domain/contract-scoring";
 import { detectRemitToDrift, type RemitToDriftResult, type RemitToInfo } from "../../domain/remit-drift";
+import { matchAgainstPo, type PoMatchOutput } from "../../domain/po-matching";
 import { itemKeyword } from "@/modules/shared/kernel/item-keyword";
 import type {
   DocumentRepository,
   InvoiceRepository,
   LineConfidenceChange,
   LineConfidenceUpdate,
+  PoRegisterRepository,
   ValidationAuditRepository,
   ValidationResultsRepository,
   VendorCandidateRepository,
@@ -40,6 +42,8 @@ export interface RunInvoiceValidationDeps {
   validationResultsRepository: ValidationResultsRepository;
   vendorMatchWriteRepository: VendorMatchWriteRepository;
   auditRepository: ValidationAuditRepository;
+  /** Optional — PO matching only runs when this is provided. */
+  poRepository?: PoRegisterRepository;
 }
 
 export interface RunInvoiceValidationArgs {
@@ -103,9 +107,9 @@ export async function runInvoiceValidation(
   // 4b. Phase 9 — D3 + F06: score each line against vendor pricing
   // history. 4c. Phase 9.5 PR3 — score against the active contract.
   // 4d. 2026-07-13 audit F7 — compare remit-to against this vendor's
-  // last approved invoice. None of the three depends on the others —
-  // run in parallel.
-  const [lineScores, contractScores, remitToDrift] = await Promise.all([
+  // last approved invoice. 4e. PO matching — 2-way / 3-way.
+  // None depends on the others — run in parallel.
+  const [lineScores, contractScores, remitToDrift, poMatchResult] = await Promise.all([
     scoreLinesAgainstVendorHistory(
       tx,
       deps,
@@ -138,6 +142,7 @@ export async function runInvoiceValidation(
       invoice.vendorName,
       { remitToName: invoice.remitToName, remitToAddress: invoice.remitToAddress },
     ),
+    runPoMatch(tx, deps, args.organizationId, invoice),
   ]);
 
   // When a line was contract-adjudicated, suppress the statistical
@@ -198,6 +203,13 @@ export async function runInvoiceValidation(
         currentRemitToAddress: invoice.remitToAddress,
       },
     });
+  }
+
+  // PO matching — findings participate in the same severity rollup and
+  // errors_json as all other finders; the match result goes to its own
+  // table after the validation_results INSERT below.
+  if (poMatchResult.findings.length > 0) {
+    findings.push(...poMatchResult.findings);
   }
 
   // 5b. PR12 C4 — snapshot prior line-confidence values, write the new
@@ -296,7 +308,25 @@ export async function runInvoiceValidation(
     });
   }
 
-  // 7. Vendor match row (append-only — keeps the candidate history visible).
+  // 7a. PO match result — separate table (FK to purchase_orders for
+  // receipt confirmation and history queries). Only written when a PO
+  // number appeared on the invoice or a match was attempted.
+  if (poMatchResult.status !== "no_po_number" && deps.poRepository) {
+    const invoiceTotal = invoice.total === null ? null : Number(invoice.total);
+    await deps.poRepository.upsertMatchResult(tx, {
+      organizationId: args.organizationId,
+      extractedInvoiceId: args.extractedInvoiceId,
+      purchaseOrderId: poMatchResult.purchaseOrderId,
+      matchType: poMatchResult.matchType,
+      status: poMatchResult.status,
+      invoiceTotal: invoiceTotal === null ? null : invoiceTotal.toFixed(2),
+      poTotal: poMatchResult.poTotal === null ? null : poMatchResult.poTotal.toFixed(2),
+      variancePct: poMatchResult.variancePct === null ? null : poMatchResult.variancePct.toFixed(4),
+      lineVariancesJson: poMatchResult.lineVariances ?? null,
+    });
+  }
+
+  // 7b. Vendor match row (append-only — keeps the candidate history visible).
   await deps.vendorMatchWriteRepository.insert(tx, {
     organizationId: args.organizationId,
     extractedInvoiceId: args.extractedInvoiceId,
@@ -516,4 +546,43 @@ async function scoreLinesAgainstActiveContract(
     contractId: active.contractId,
     rateCardHash: active.rateCardHash,
   };
+}
+
+/**
+ * PO matching — load the PO from the register (if a number was extracted)
+ * and run the pure matchAgainstPo domain function.
+ *
+ * `PO_THREE_WAY_ENABLED` env var enables 3-way mode (receipt confirmation +
+ * line quantity checks). Default off; set to "true" to enable. Per-org
+ * toggling is phase-2 work (no per-org config store in the worker today).
+ */
+async function runPoMatch(
+  tx: Tx,
+  deps: RunInvoiceValidationDeps,
+  organizationId: string,
+  invoice: { purchaseOrderNumber: string | null; total: string | null },
+): Promise<PoMatchOutput> {
+  const threeWayEnabled = process.env.PO_THREE_WAY_ENABLED === "true";
+  const poNumber = invoice.purchaseOrderNumber;
+
+  if (!poNumber || !deps.poRepository) {
+    return {
+      findings: [],
+      matchType: null,
+      status: "no_po_number",
+      purchaseOrderId: null,
+      poTotal: null,
+      variancePct: null,
+      lineVariances: null,
+    };
+  }
+
+  const po = await deps.poRepository.findByPoNumber(tx, organizationId, poNumber);
+
+  return matchAgainstPo({
+    poNumber,
+    invoiceTotal: invoice.total === null ? 0 : Number(invoice.total),
+    po,
+    threeWayEnabled,
+  });
 }
