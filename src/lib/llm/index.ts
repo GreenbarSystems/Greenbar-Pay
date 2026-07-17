@@ -54,6 +54,12 @@ import {
   CONTRACT_PROMPT_NAME,
   CONTRACT_PROMPT_VERSION,
 } from "./contract-prompt";
+import {
+  buildSpendQueryPrompt,
+  SPEND_QUERY_PROMPT_NAME,
+  SPEND_QUERY_PROMPT_VERSION,
+} from "./spend-query-prompt";
+import { SpendQueryIntentSchema, type SpendQueryIntent } from "./spend-query-schema";
 import { checkCircuit, recordOutcome } from "./circuit";
 import { quotaRemaining } from "./quota";
 import type { BuiltPrompt } from "./prompt";
@@ -345,8 +351,35 @@ export async function dispatchContractExtraction(
   });
 }
 
+// ─── Call 4: NL spend query extraction ──────────────────────────────────────
+
+interface SpendQueryGatewayInput {
+  organizationId: string;
+  question: string;
+  today: string;
+  modelId?: string;
+  now?: number;
+}
+
+export async function dispatchSpendQueryExtraction(
+  input: SpendQueryGatewayInput,
+): Promise<DispatchOutcome<SpendQueryIntent>> {
+  const prompt = buildSpendQueryPrompt(input.question, input.today);
+  return runDispatch({
+    organizationId: input.organizationId,
+    inputCharCount: input.question.length,
+    prompt,
+    outputSchema: SpendQueryIntentSchema,
+    promptName: SPEND_QUERY_PROMPT_NAME,
+    promptVersion: SPEND_QUERY_PROMPT_VERSION,
+    modelId: input.modelId,
+    now: input.now,
+  });
+}
+
 export { LlmSchemaError, ProviderError };
 // Re-export the prior name so existing callers keep working until they migrate.
 export { LlmSchemaError as InvoiceSchemaError } from "./anthropic";
 export type { InvoiceExtractionResult, ContractExtractionResult };
 export type { BriefingCardResult };
+export type { SpendQueryIntent };

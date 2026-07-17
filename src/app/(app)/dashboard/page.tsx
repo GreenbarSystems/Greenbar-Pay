@@ -5,6 +5,7 @@
 import Link from "next/link";
 import { auth } from "@/lib/auth";
 import { withOrg } from "@/db/client";
+import { SpendSearch } from "./SpendSearch";
 import {
   documents,
   extractedInvoices,
@@ -174,6 +175,9 @@ export default async function DashboardPage() {
           as of {new Date().toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })}
         </p>
       </div>
+
+      {/* ── NL spend search ── */}
+      <SpendSearch />
 
       {/* ── Client tiles (multi-client) or org quick-access (solo) ── */}
       {multiClient ? (
