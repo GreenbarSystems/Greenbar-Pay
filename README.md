@@ -90,7 +90,46 @@ set `ENABLE_MULTI_CLIENT=true` in your `.env`.
 - `/exports` history page with status, size, item count, download link, error tooltip
 - `/dashboard` pilot metrics — uploaded, reached extraction, awaiting review, approved, extraction method mix, LLM success rate + failure breakdown, confidence distribution, duplicates caught, export success rate
 
-MVP scope (PRD §"MVP Cut Line") is now satisfied. Post-MVP: GL coding, PO matching, ERP draft-bill connectors, payment approvals, multi-level workflow.
+MVP scope (PRD §"MVP Cut Line") is satisfied as of Phase 5. Everything below is post-MVP work that has since shipped.
+
+**Phase 7 — Vendor profiles & PO matching** ✓ shipped
+- Vendor pricing history + `recompute-vendor-profile` job (advisory-locked per vendor; batched, `SKIP LOCKED`-safe)
+- Contract-rate and line-item pricing drift checks feed into the deterministic validation engine
+- `matchAgainstPo()` domain function matches invoice lines against open POs by item keyword + quantity, and checks `receiptConfirmedAt` before allowing a match
+- `/settings/po` + `POST /api/po/:id/confirm-receipt` — PO intake and receipt confirmation
+- Covered by `po-matching.test.ts` and exercised end-to-end via the invoice validation use-case tests
+
+**Phase 8 — AI briefing cards** ✓ shipped
+- Deterministic 0–100 risk score (blocking/warning findings, vendor terms drift, duplicate submissions, low OCR confidence, "warming up" vendors with < 3 invoices) — the score itself is never LLM-generated, only the justification prose is, so it stays reproducible across model upgrades and defensible to auditors
+- `generate-briefing-card` job (LLM dispatch, `batchSize: 1` for circuit-breaker visibility) writes the score + prose to `briefing_cards`
+- Briefing card is pinned to the invoice at approval time and carried into the audit trail
+
+**Phase 9 / 9.5 — Vendor contracts** ✓ shipped
+- `extract-contract-data` job (LLM dispatch) pulls contract terms from uploaded vendor contracts
+- Deterministic `resolveVendor()` matches a contract's extracted vendor name to an existing vendor by exact normalized-name or alias match only (no fuzzy pass — contract activation is an unsupervised admin action, unlike invoice review where a human can correct a fuzzy match inline)
+- Unmatched contracts sit with `vendor_id = NULL` until an admin manually assigns or creates the vendor
+- `/vendors/:id` contracts section + `POST /api/ap/contracts/:id/activate`
+
+**Phase 10 — Pre-approval coaching** ✓ shipped
+- Deterministic (non-LLM) coaching-prompt generator covering cumulative spend, contract-terms mismatch, new line items, unusual totals, and early-payment discounts — kept deterministic on purpose to avoid a third per-invoice LLM call and to keep prompts reproducible for audit
+- Loss-framed messaging by design: nudges describe the consequence of approving, never a "you save X" gain framing
+- PII boundary matches the briefing card rule: never names the vendor or quotes invoice/PO numbers, addresses, or EIN
+- `POST /api/ap/review/:id/coaching/dismiss` lets a reviewer dismiss a nudge
+
+**Phase 11 — Audit-ready evidence packets** ✓ shipped
+- `assemble-evidence-packet` job seals a manifest (original document hash, extracted invoice + line confidence scores, active validation results, the briefing card pinned at approval, vendor profile snapshot, approver action log, override log when present) with a SHA-256 hash over deterministic JSON
+- `evidence_packets` table; `GET /api/ap/exports/evidence/:invoiceId` serves the sealed packet
+- Remit-to drift detector (`detectRemitToDrift`) flags — as a non-blocking warning — when a vendor's payment destination changes vs. their last approved invoice, as defense-in-depth against prompt-injection or OCR-corrupted remit fields
+
+**Phase 12 — Accounting system sync** ✓ shipped
+- OAuth 2.0 + PKCE connect/callback/disconnect flows for **QuickBooks Online**, **Xero**, and **NetSuite** (NetSuite account ID auto-discovered from the userinfo endpoint — no per-org env config); **Sage Intacct** uses its native XML Web Services session auth instead of OAuth
+- `accounting_connections` table (RLS-scoped, AES-256-GCM encrypted tokens) added in migration 0033; NetSuite/Intacct added in 0034 with no schema change since `provider` is already text
+- `POST /api/ap/exports` accepts `format: 'qbo' | 'xero' | 'netsuite' | 'intacct'`, requires an active connection, and enqueues the matching sync job with a per-export `singletonKey`
+- Each `sync-to-*` job finds-or-creates the vendor in the target system, posts the invoice as a Bill / Vendor Bill / APBILL, marks `export_items` synced or `sync_failed`, and advances `extracted_invoices` / `documents` to `exported` — all four handlers registered in the worker (`batchSize: 1` each, consistent with the external-API circuit-breaker pattern used elsewhere)
+- `/settings/integrations` (+ `/settings/integrations/intacct` for credential entry) shows connect/disconnect state per provider
+- **Gap:** no test coverage yet for any of the four integration clients or sync jobs — everything else in this list has dedicated tests, this doesn't
+
+Remaining post-MVP scope: GL coding (line items sync with a default expense account only — no per-line GL account selection), payment execution (ACH/wire/card — today's integrations stop at posting a bill/draft into the accounting system, they don't move money), multi-level approval workflow.
 
 ## Local dev
 
