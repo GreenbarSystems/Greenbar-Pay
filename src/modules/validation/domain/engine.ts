@@ -20,6 +20,12 @@ export type FindingCode =
   | "missing_total"
   | "invalid_invoice_date"
   | "duplicate_invoice"
+  // Same vendor + same amount as another invoice already in the
+  // pipeline, but a DIFFERENT invoice number — the pattern a
+  // resubmission dodging exact-match duplicate detection produces.
+  // Warning, not blocking: legitimately recurring invoices (e.g. a
+  // flat monthly retainer) can innocently collide on vendor+amount.
+  | "possible_duplicate_amount"
   | "not_an_invoice"
   // Warning rules
   | "missing_due_date"
@@ -87,8 +93,24 @@ export interface InvoiceForValidation {
 
 export interface ValidationInputs {
   invoice: InvoiceForValidation;
-  /** Set of (vendor_name, invoice_number) pairs already approved/exported in this org. */
-  priorApprovedKeys: Set<string>;
+  /**
+   * Normalized (vendor_name, invoice_number) keys for every OTHER
+   * invoice in this org that's approved/exported OR still in-flight
+   * (pending/needs_review/pending_final_approval) — in-flight is
+   * included so two near-simultaneous submissions of the same invoice
+   * catch each other instead of both reaching the queue clean while
+   * neither is approved yet.
+   */
+  priorDuplicateKeys: Set<string>;
+  /**
+   * Normalized (vendor_name, total) keys from the same candidate set
+   * as priorDuplicateKeys. Catches a resubmission that dodges exact
+   * duplicate detection by altering the invoice number while the
+   * amount stays the same — flagged as a warning, not blocking, since
+   * legitimately recurring same-amount invoices from one vendor are
+   * common (e.g. a flat monthly retainer).
+   */
+  priorAmountKeys: Set<string>;
   /** Vendor match: best confidence label and score, or null if no candidates. */
   vendorMatch: {
     confidence: "low" | "medium" | "high";
@@ -164,7 +186,7 @@ export function validateInvoice(inputs: ValidationInputs): ValidationFinding[] {
   }
   if (inv.vendorName && inv.invoiceNumber) {
     const key = duplicateKey(inv.vendorName, inv.invoiceNumber);
-    if (inputs.priorApprovedKeys.has(key)) {
+    if (inputs.priorDuplicateKeys.has(key)) {
       findings.push({
         code: "duplicate_invoice",
         severity: "blocking",
@@ -172,9 +194,20 @@ export function validateInvoice(inputs: ValidationInputs): ValidationFinding[] {
         // PR7's PII guard forbids vendor name + invoice number in
         // outputs; keep them out of inputs too. The structured context
         // still carries duplicateKey for the sanctioned errors_json.
-        message: "A prior approved invoice with the same vendor and invoice number was found.",
+        message: "A prior invoice with the same vendor and invoice number was found.",
         context: { duplicateKey: key },
       });
+    } else if (inv.total !== null) {
+      const amtKey = vendorAmountKey(inv.vendorName, inv.total);
+      if (inputs.priorAmountKeys.has(amtKey)) {
+        findings.push({
+          code: "possible_duplicate_amount",
+          severity: "warning",
+          message:
+            "Another invoice from this vendor for the same amount was found, under a different invoice number. Verify this isn't a resubmission before approving.",
+          context: { vendorAmountKey: amtKey },
+        });
+      }
     }
   }
 
@@ -294,9 +327,34 @@ export function validateInvoice(inputs: ValidationInputs): ValidationFinding[] {
   return findings;
 }
 
-/** Single-pair duplicate key — normalized vendor + raw invoice number. */
+/**
+ * Single-pair duplicate key — normalized vendor + normalized invoice
+ * number. Previously compared invoice numbers with only
+ * `trim().toLowerCase()`, so "INV-001" and "INV -001" (or any other
+ * punctuation/whitespace variant of the identical number) produced
+ * different keys and evaded detection entirely. normalizeInvoiceNumber
+ * strips everything but letters and digits, same spirit as
+ * normalizeVendor, so formatting differences can no longer be used to
+ * dodge the duplicate check.
+ */
 export function duplicateKey(vendorName: string, invoiceNumber: string): string {
-  return `${normalizeVendor(vendorName)}|${invoiceNumber.trim().toLowerCase()}`;
+  return `${normalizeVendor(vendorName)}|${normalizeInvoiceNumber(invoiceNumber)}`;
+}
+
+/** Lowercase, strip everything but letters and digits. */
+export function normalizeInvoiceNumber(invoiceNumber: string): string {
+  return invoiceNumber.toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+
+/**
+ * Vendor + total key for the amount cross-check — catches a
+ * resubmission that changes the invoice number (defeating
+ * duplicateKey) while the amount stays the same. Total is rounded to
+ * the cent via toFixed(2) so floating-point noise can't split an
+ * otherwise-identical amount into two keys.
+ */
+export function vendorAmountKey(vendorName: string, total: number): string {
+  return `${normalizeVendor(vendorName)}|${total.toFixed(2)}`;
 }
 
 /**

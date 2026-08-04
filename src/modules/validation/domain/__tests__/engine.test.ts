@@ -4,6 +4,8 @@ import {
   blockingPresent,
   duplicateKey,
   normalizeVendor,
+  normalizeInvoiceNumber,
+  vendorAmountKey,
   MATH_TOLERANCE,
 } from "@/modules/validation/domain/engine";
 
@@ -41,7 +43,8 @@ const goodInvoice: {
 
 const inputs = (overrides: Partial<typeof goodInvoice> = {}) => ({
   invoice: { ...goodInvoice, ...overrides },
-  priorApprovedKeys: new Set<string>(),
+  priorDuplicateKeys: new Set<string>(),
+  priorAmountKeys: new Set<string>(),
   vendorMatch: null,
   textLength: 500,
 });
@@ -76,7 +79,7 @@ describe("validateInvoice", () => {
     const key = duplicateKey("ABC Supplies LLC", "INV-10492");
     const f = validateInvoice({
       ...inputs(),
-      priorApprovedKeys: new Set([key]),
+      priorDuplicateKeys: new Set([key]),
     });
     expect(f.find((x) => x.code === "duplicate_invoice")?.severity).toBe("blocking");
   });
@@ -87,13 +90,48 @@ describe("validateInvoice", () => {
     const key = duplicateKey("ABC Supplies LLC", "INV-10492");
     const f = validateInvoice({
       ...inputs(),
-      priorApprovedKeys: new Set([key]),
+      priorDuplicateKeys: new Set([key]),
     });
     const dup = f.find((x) => x.code === "duplicate_invoice")!;
     expect(dup.message).not.toContain("ABC Supplies LLC");
     expect(dup.message).not.toContain("INV-10492");
     // Structured context still carries the key for the sanctioned audit row.
     expect(dup.context).toHaveProperty("duplicateKey", key);
+  });
+
+  // Closes the exact-string-match gap: reformatting an invoice number
+  // (dash removed, space inserted, etc.) with no semantic change used
+  // to produce a different key and evade detection entirely.
+  it("blocks a duplicate even when the invoice number is reformatted", () => {
+    const key = duplicateKey("ABC Supplies LLC", "INV-10492");
+    const f = validateInvoice({
+      ...inputs({ invoiceNumber: "INV 10492" }),
+      priorDuplicateKeys: new Set([key]),
+    });
+    expect(f.find((x) => x.code === "duplicate_invoice")?.severity).toBe("blocking");
+  });
+
+  it("warns (does not block) when vendor+amount match but the invoice number differs", () => {
+    const amtKey = vendorAmountKey("ABC Supplies LLC", 1353.13);
+    const f = validateInvoice({
+      ...inputs({ invoiceNumber: "INV-99999" }),
+      priorAmountKeys: new Set([amtKey]),
+    });
+    expect(f.find((x) => x.code === "duplicate_invoice")).toBeUndefined();
+    const possible = f.find((x) => x.code === "possible_duplicate_amount")!;
+    expect(possible.severity).toBe("warning");
+    expect(possible.message).not.toContain("ABC Supplies LLC");
+  });
+
+  it("does not raise possible_duplicate_amount when the exact duplicate already fired", () => {
+    const key = duplicateKey("ABC Supplies LLC", "INV-10492");
+    const amtKey = vendorAmountKey("ABC Supplies LLC", 1353.13);
+    const f = validateInvoice({
+      ...inputs(),
+      priorDuplicateKeys: new Set([key]),
+      priorAmountKeys: new Set([amtKey]),
+    });
+    expect(f.filter((x) => x.code === "possible_duplicate_amount")).toHaveLength(0);
   });
 
   // PR11 C6 — drift message must not carry exact dollar amounts.
@@ -156,5 +194,34 @@ describe("normalizeVendor", () => {
   it("lowercases, strips punctuation, collapses whitespace", () => {
     expect(normalizeVendor("ABC Supplies, LLC.")).toBe("abc supplies llc");
     expect(normalizeVendor("  ACME   Inc.  ")).toBe("acme inc");
+  });
+});
+
+describe("normalizeInvoiceNumber", () => {
+  it("lowercases and strips all punctuation/whitespace", () => {
+    expect(normalizeInvoiceNumber("INV-001")).toBe("inv001");
+    expect(normalizeInvoiceNumber("INV -001")).toBe("inv001");
+    expect(normalizeInvoiceNumber("inv 001")).toBe("inv001");
+    expect(normalizeInvoiceNumber("  INV#001  ")).toBe("inv001");
+  });
+
+  it("still distinguishes genuinely different numbers", () => {
+    expect(normalizeInvoiceNumber("INV-001")).not.toBe(normalizeInvoiceNumber("INV-0001"));
+  });
+});
+
+describe("duplicateKey", () => {
+  it("produces the same key for cosmetically different invoice numbers", () => {
+    expect(duplicateKey("ABC Supplies LLC", "INV-001")).toBe(
+      duplicateKey("ABC Supplies LLC", "INV -001"),
+    );
+  });
+});
+
+describe("vendorAmountKey", () => {
+  it("rounds to the cent so float noise can't split an identical amount", () => {
+    expect(vendorAmountKey("ABC Supplies LLC", 1353.130000001)).toBe(
+      vendorAmountKey("ABC Supplies LLC", 1353.13),
+    );
   });
 });

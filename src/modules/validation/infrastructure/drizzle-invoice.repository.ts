@@ -5,7 +5,7 @@
 import { and, desc, eq, inArray, isNotNull, sql } from "drizzle-orm";
 import type { Tx } from "@/db/client";
 import { extractedInvoiceLines, extractedInvoices } from "@/db/schema";
-import { duplicateKey } from "../domain/engine";
+import { duplicateKey, vendorAmountKey } from "../domain/engine";
 import type { RemitToInfo } from "../domain/remit-drift";
 import type {
   InvoiceHeaderForValidation,
@@ -75,29 +75,57 @@ async function findForValidation(
   return { invoice, lines };
 }
 
-async function findPriorApprovedKeys(
+/**
+ * Candidate statuses for duplicate detection: approved/exported (a
+ * real prior decision) PLUS every still-in-flight status. Without the
+ * in-flight statuses, two copies of the same fraudulent invoice
+ * submitted minutes apart both sit as "pending" and never see each
+ * other — the duplicate check only ever compared against invoices
+ * that had already cleared review. rejected/superseded are excluded:
+ * a rejected invoice was already judged not to belong in the ledger,
+ * and a superseded row is a stale extraction retry, not a distinct
+ * submission.
+ */
+const DUPLICATE_CHECK_STATUSES = [
+  "pending",
+  "needs_review",
+  "pending_final_approval",
+  "approved",
+  "exported",
+] as const;
+
+async function findDuplicateCheckKeys(
   tx: Tx,
   organizationId: string,
   excludeInvoiceId: string,
-): Promise<Set<string>> {
-  const priorRows = await tx
+): Promise<{ duplicateKeys: Set<string>; amountKeys: Set<string> }> {
+  const rows = await tx
     .select({
       id: extractedInvoices.id,
       vendorName: extractedInvoices.vendorName,
       invoiceNumber: extractedInvoices.invoiceNumber,
+      total: extractedInvoices.total,
     })
     .from(extractedInvoices)
     .where(
       and(
         eq(extractedInvoices.organizationId, organizationId),
-        inArray(extractedInvoices.reviewStatus, ["approved", "exported"]),
+        inArray(extractedInvoices.reviewStatus, [...DUPLICATE_CHECK_STATUSES]),
       ),
     );
-  return new Set(
-    priorRows
-      .filter((r) => r.vendorName && r.invoiceNumber && r.id !== excludeInvoiceId)
-      .map((r) => duplicateKey(r.vendorName!, r.invoiceNumber!)),
-  );
+
+  const duplicateKeys = new Set<string>();
+  const amountKeys = new Set<string>();
+  for (const r of rows) {
+    if (r.id === excludeInvoiceId || !r.vendorName) continue;
+    if (r.invoiceNumber) {
+      duplicateKeys.add(duplicateKey(r.vendorName, r.invoiceNumber));
+    }
+    if (r.total !== null) {
+      amountKeys.add(vendorAmountKey(r.vendorName, Number(r.total)));
+    }
+  }
+  return { duplicateKeys, amountKeys };
 }
 
 /**
@@ -248,7 +276,7 @@ async function updateReviewStatusIfActive(
 export const drizzleInvoiceRepository: InvoiceRepository = {
   lockForValidation,
   findForValidation,
-  findPriorApprovedKeys,
+  findDuplicateCheckKeys,
   findLatestApprovedRemitTo,
   findLineConfidenceSnapshots,
   updateLineConfidenceBatch,

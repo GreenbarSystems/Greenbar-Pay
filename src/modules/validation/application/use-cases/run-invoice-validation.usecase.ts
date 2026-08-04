@@ -85,12 +85,15 @@ export async function runInvoiceValidation(
   if (!loaded) throw new Error(`invoice ${args.extractedInvoiceId} not found`);
   const { invoice, lines } = loaded;
 
-  // 2. Prior approved/exported (vendor, invoice_number) pairs for dedup.
-  const priorApprovedKeys = await deps.invoiceRepository.findPriorApprovedKeys(
-    tx,
-    args.organizationId,
-    args.extractedInvoiceId,
-  );
+  // 2. Duplicate-check candidate keys (vendor+number, vendor+amount)
+  // from every other invoice in the org, approved/exported or still
+  // in-flight. See findDuplicateCheckKeys for why in-flight is included.
+  const { duplicateKeys: priorDuplicateKeys, amountKeys: priorAmountKeys } =
+    await deps.invoiceRepository.findDuplicateCheckKeys(
+      tx,
+      args.organizationId,
+      args.extractedInvoiceId,
+    );
 
   // 3. Vendor match. Phase 7 — include aliases so previously-promoted
   // variant spellings resolve as exact instead of falling through to
@@ -176,7 +179,8 @@ export async function runInvoiceValidation(
       total: invoice.total === null ? null : Number(invoice.total),
       lineItems: lines,
     },
-    priorApprovedKeys,
+    priorDuplicateKeys,
+    priorAmountKeys,
     vendorMatch: vm.vendorId
       ? { confidence: vm.confidence, score: vm.score }
       : null,

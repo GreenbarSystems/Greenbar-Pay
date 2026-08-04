@@ -95,12 +95,22 @@ export interface InvoiceRepository {
     lines: InvoiceLineForValidation[];
   } | null>;
 
-  /** (vendor_name, invoice_number) pairs already approved/exported, excluding this invoice. */
-  findPriorApprovedKeys(
+  /**
+   * Duplicate-check candidate keys from every OTHER invoice in the org
+   * that's approved/exported OR still in-flight (pending/needs_review/
+   * pending_final_approval) — in-flight is included so two
+   * near-simultaneous submissions of the same invoice catch each other
+   * instead of both reaching the queue clean while neither is approved
+   * yet. `duplicateKeys` is normalized (vendor_name, invoice_number);
+   * `amountKeys` is normalized (vendor_name, total), used as a
+   * secondary warning-level check when the invoice number was altered
+   * to dodge the primary one.
+   */
+  findDuplicateCheckKeys(
     tx: Tx,
     organizationId: string,
     excludeInvoiceId: string,
-  ): Promise<Set<string>>;
+  ): Promise<{ duplicateKeys: Set<string>; amountKeys: Set<string> }>;
 
   /**
    * 2026-07-13 audit F7 — the vendor's most recently APPROVED (by

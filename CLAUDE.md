@@ -722,4 +722,36 @@ independently to `po_match_results` (for receipt confirmation and CSV export).
 
 **Evidence packet**: `schemaVersion` was bumped to `"evidence.v2"` when the `poMatch` block was added to `src/lib/evidence/assemble.ts`. Existing v1 packets are unaffected (they were sealed at approval time). Auditors re-verifying a v1 packet should note it predates PO matching.
 
+### Duplicate invoice detection hardened (2026-08)
+
+`duplicateKey()` in `src/modules/validation/domain/engine.ts` previously
+compared invoice numbers with only `trim().toLowerCase()` — cosmetic
+variants of the identical number ("INV-001" vs. "INV -001" vs. "INV
+001") produced different keys and evaded detection entirely. It also
+only ever checked against **approved/exported** invoices, so two
+copies of the same fraudulent invoice submitted minutes apart both sat
+as `pending` and never saw each other. Two changes:
+
+- **`normalizeInvoiceNumber()`** strips everything but letters and
+  digits (same spirit as `normalizeVendor`) before the key is built,
+  so formatting differences can no longer dodge the check.
+- **`findDuplicateCheckKeys()`** (renamed from `findPriorApprovedKeys`
+  on `InvoiceRepository`) now includes every in-flight status
+  (`pending`, `needs_review`, `pending_final_approval`) alongside
+  `approved`/`exported` when building candidate keys — see
+  `DUPLICATE_CHECK_STATUSES` in `drizzle-invoice.repository.ts`.
+
+**New secondary check — `possible_duplicate_amount` (warning, not
+blocking).** Amount was not part of the duplicate key at all before
+this change. Rather than folding total into the primary blocking key
+(which would have *weakened* detection — a resubmission with an
+altered invoice number would then also need to alter the amount to
+still match), `vendorAmountKey()` runs a separate vendor+total check
+against the same candidate set and fires only when the primary
+`duplicate_invoice` key did NOT already match. This specifically
+targets a resubmission that changes the invoice number to dodge the
+exact check while the dollar amount stays the same. Warning-level
+because legitimately recurring same-amount invoices from one vendor
+(e.g. a flat monthly retainer) are common and shouldn't auto-block.
+
 See `README.md` for full stack, conventions, and local-dev instructions.
