@@ -127,7 +127,7 @@ export default function IntacctConnectPage() {
 
           <p className="text-xs text-gray-400">
             Your credentials are encrypted at rest and never stored in plain text.
-            Greenbar Pay uses your Intacct Web Services API to create AP Bills only.
+            Greenbar AP Assurance uses your Intacct Web Services API to create AP Bills only.
           </p>
 
           <button

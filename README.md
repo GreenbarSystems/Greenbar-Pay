@@ -1,4 +1,4 @@
-# Greenbar Pay
+# Greenbar AP Assurance
 
 AP invoice intake, OCR, and LLM extraction with a human review queue. See
 `docs/ap-invoice-ai-mvp-technical-prd-merged.md` for the PRD; the addendum

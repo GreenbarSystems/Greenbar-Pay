@@ -362,7 +362,7 @@ async function main() {
     process.exit(1);
   }
 
-  console.log(`\nGreenbar Pay — Extraction Accuracy Benchmark`);
+  console.log(`\nGreenbar AP Assurance — Extraction Accuracy Benchmark`);
   console.log(`Model: ${MODEL}  |  Fixtures: ${fixtureDirs.length}  |  Dry run: ${dryRun}\n`);
 
   const fixtureResults: FixtureResult[] = [];

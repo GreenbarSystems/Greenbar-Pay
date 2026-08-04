@@ -226,7 +226,7 @@ export async function createNetsuiteBill(
 
   const bill: Record<string, unknown> = {
     entity: { id: vendorId },
-    memo: `Synced from Greenbar Pay${input.invoiceNumber ? ` · Invoice ${input.invoiceNumber}` : ""}`,
+    memo: `Synced from Greenbar AP Assurance${input.invoiceNumber ? ` · Invoice ${input.invoiceNumber}` : ""}`,
     expenselist: { expense: expenses },
   };
 

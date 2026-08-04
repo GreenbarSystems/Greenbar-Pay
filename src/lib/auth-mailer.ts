@@ -4,9 +4,9 @@
  * Two transports, picked by env:
  *
  *   • SMTP — when SMTP_HOST is set. Operator-supplied; works against any
- *     SMTP service (SES, SendGrid, Mailgun, Postfix, etc.). Pay's inbox
- *     poller already runs against AWS so SES is the natural prod choice,
- *     but we don't lock to it here.
+ *     SMTP service (SES, SendGrid, Mailgun, Postfix, etc.). AP Assurance's
+ *     inbox poller already runs against AWS so SES is the natural prod
+ *     choice, but we don't lock to it here.
  *
  *   • Console (dev) — when SMTP_HOST is unset. Logs a clearly-boxed
  *     "click here" line to stdout so a developer running `npm run dev`
@@ -27,7 +27,7 @@ interface MailerArgs {
 }
 
 const FROM = process.env.AUTH_EMAIL_FROM ?? "noreply@greenbarpay.local";
-const PRODUCT = process.env.AUTH_EMAIL_PRODUCT_NAME ?? "Greenbar Pay";
+const PRODUCT = process.env.AUTH_EMAIL_PRODUCT_NAME ?? "Greenbar AP Assurance";
 const DEV_LINK_FILE = path.join(process.cwd(), ".next-auth-dev-link.txt");
 
 function buildPlainText({ url, expiresMinutes }: { url: string; expiresMinutes: number }): string {

@@ -2,7 +2,7 @@ import "./globals.css";
 import type { Metadata } from "next";
 
 export const metadata: Metadata = {
-  title: "Greenbar Pay",
+  title: "Greenbar AP Assurance",
   description: "AP invoice intake and review",
 };
 

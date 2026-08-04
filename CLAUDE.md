@@ -1,4 +1,4 @@
-# Greenbar Pay — Agent Instructions
+# Greenbar AP Assurance — Agent Instructions
 
 ## Product direction: solo-first
 

@@ -27,7 +27,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
               <path d="M1.5 4.5l5.7 4.7a1.4 1.4 0 001.6 0l5.7-4.7" />
             </svg>
           </div>
-          <span className="text-sm font-semibold tracking-tight text-gray-900">Greenbar Pay</span>
+          <span className="text-sm font-semibold tracking-tight text-gray-900">Greenbar AP Assurance</span>
         </div>
 
         {/* Nav */}

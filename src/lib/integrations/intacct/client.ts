@@ -240,7 +240,7 @@ export async function createIntacctBill(
           ${input.invoiceDate ? `<WHENCREATED>${toIntacctDate(input.invoiceDate)}</WHENCREATED>` : ""}
           ${input.dueDate ? `<WHENDUE>${toIntacctDate(input.dueDate)}</WHENDUE>` : ""}
           ${input.currency && input.currency !== "USD" ? `<CURRENCY>${input.currency}</CURRENCY>` : ""}
-          <DESCRIPTION>Synced from Greenbar Pay${input.invoiceNumber ? ` · Invoice ${input.invoiceNumber}` : ""}</DESCRIPTION>
+          <DESCRIPTION>Synced from Greenbar AP Assurance${input.invoiceNumber ? ` · Invoice ${input.invoiceNumber}` : ""}</DESCRIPTION>
           <APBILLITEMS>
             ${itemsXml}
           </APBILLITEMS>

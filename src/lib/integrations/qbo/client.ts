@@ -206,7 +206,7 @@ export async function createQboBill(
   const bill: Record<string, unknown> = {
     VendorRef: { value: vendorId },
     Line: lines,
-    PrivateNote: `Synced from Greenbar Pay${input.invoiceNumber ? ` · Invoice ${input.invoiceNumber}` : ""}`,
+    PrivateNote: `Synced from Greenbar AP Assurance${input.invoiceNumber ? ` · Invoice ${input.invoiceNumber}` : ""}`,
   };
 
   if (input.invoiceDate) bill["TxnDate"] = input.invoiceDate;
