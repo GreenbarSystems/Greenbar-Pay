@@ -615,6 +615,43 @@ If this is happening at all, also investigate why the job stopped
 running for that long — this is a symptom of a worker outage or
 scheduler misconfiguration, not just a partition to patch up.
 
+### `audit_events` TRUNCATE is revoked from app_user/app_worker (migration 0037)
+
+The append-only RULES from 0030 (`DO INSTEAD NOTHING` on UPDATE/DELETE)
+never covered TRUNCATE — Postgres RULES don't intercept it, full stop,
+regardless of what the RULE targets. TRUNCATE also was never actually
+GRANTed to `app_user`/`app_worker` in the first place (every GRANT in
+0030 and in `create_audit_events_partition()` lists only SELECT,
+INSERT, UPDATE, DELETE), so this was closer to an unproven assumption
+than a live hole — but "nobody happened to grant it" isn't the same
+guarantee as "it is explicitly revoked and a test proves it." Migration
+0037 adds `REVOKE TRUNCATE ... FROM PUBLIC, app_user, app_worker` on
+the parent table, the DEFAULT partition, every existing monthly
+partition (looped via `pg_inherits`), and updates
+`create_audit_events_partition()` so every future partition gets the
+same REVOKE going forward. `src/db/__tests__/audit-events-truncate.test.ts`
+asserts the actual runtime privilege via `has_table_privilege()`, not
+just that the migration file contains the word REVOKE.
+
+**`app_admin` keeps TRUNCATE — this is accepted, not an oversight.**
+`DATABASE_URL_ADMIN` connects as `app_admin`, which is therefore the
+OWNER of every table these migrations create (Postgres makes the
+executing role the owner on `CREATE TABLE`). Table owners always
+retain TRUNCATE regardless of any REVOKE; only reassigning ownership
+to a role application code never authenticates as would close that,
+which would mean splitting a migration-only owner role out of
+`app_admin` — a bigger, riskier change than this migration, and out of
+scope here. This isn't a new trust boundary: `app_admin` is already
+BYPASSRLS and already documented above as trusted to `DROP RULE
+audit_events_no_update` by hand during partition recovery. No
+per-request application code path authenticates as `app_admin` to
+serve a user action — its use is limited to migrations, the
+`ensureAuditEventPartitions`/`cleanupIdempotencyKeys` jobs, pre-login
+auth lookups, and `/api/healthz`. What 0037 actually closes is the
+every-day risk: `app_user` and `app_worker` — what the running
+application and its background jobs connect as for every real request
+— can now provably never TRUNCATE the audit trail.
+
 ### drizzle-kit's generated-migration track had drifted (partially fixed)
 
 `extraction_corrections`, `llm_circuit_state`, `verification_tokens`,
