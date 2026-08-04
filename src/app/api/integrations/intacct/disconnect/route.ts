@@ -3,13 +3,17 @@ import { auth } from "@/lib/auth";
 import { withOrg } from "@/db/client";
 import { accountingConnections } from "@/db/schema";
 import { and, eq } from "drizzle-orm";
+import { requireOrgAdmin } from "@/lib/api/route-guards";
 
 export async function DELETE(req: Request) {
   const session = await auth();
   if (!session?.user) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
-  const { organizationId } = session.user;
+  const { organizationId, role } = session.user;
+
+  const gate = requireOrgAdmin(role);
+  if (gate) return gate;
 
   await withOrg(organizationId, async (tx) => {
     await tx

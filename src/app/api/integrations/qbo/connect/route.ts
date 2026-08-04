@@ -11,12 +11,16 @@ import { auth } from "@/lib/auth";
 import { QBO_AUTH_URL, QBO_SCOPES } from "@/lib/integrations/qbo/client";
 import { generateCodeVerifier, generateCodeChallenge, generateState } from "@/lib/integrations/pkce";
 import { encryptOAuthState } from "@/lib/integrations/tokens";
+import { requireOrgAdmin } from "@/lib/api/route-guards";
 
 export async function GET() {
   const session = await auth();
   if (!session?.user) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
+
+  const gate = requireOrgAdmin(session.user.role);
+  if (gate) return gate;
 
   const redirectUri = `${process.env.AUTH_URL}/api/integrations/qbo/callback`;
   const clientId = process.env.QBO_CLIENT_ID;

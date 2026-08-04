@@ -6,6 +6,14 @@ export type UserRole = "owner" | "admin" | "reviewer" | "clerk" | "viewer";
 
 export type Permission =
   | "billing.manage"
+  /**
+   * Also gates org-level settings generally (workflow approval stages,
+   * PO matching mode, accounting integration connect/disconnect) —
+   * every one of those call sites is documented as "owner + admin
+   * only," so keep it granted to both roles below. It was missing from
+   * admin's set for a while, which silently locked admins out of
+   * /settings and every settings API route entirely.
+   */
   | "users.manage"
   | "clients.manage"
   | "invoice.upload"
@@ -54,6 +62,7 @@ const MATRIX: Record<UserRole, ReadonlySet<Permission>> = {
     "po.confirm_receipt",
   ]),
   admin: new Set<Permission>([
+    "users.manage",
     "clients.manage",
     "invoice.upload",
     "invoice.edit",

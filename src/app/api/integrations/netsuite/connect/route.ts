@@ -11,12 +11,16 @@ import { auth } from "@/lib/auth";
 import { NETSUITE_AUTH_URL, NETSUITE_SCOPES } from "@/lib/integrations/netsuite/client";
 import { generateCodeVerifier, generateCodeChallenge, generateState } from "@/lib/integrations/pkce";
 import { encryptOAuthState } from "@/lib/integrations/tokens";
+import { requireOrgAdmin } from "@/lib/api/route-guards";
 
 export async function GET() {
   const session = await auth();
   if (!session?.user) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
+
+  const gate = requireOrgAdmin(session.user.role);
+  if (gate) return gate;
 
   const clientId = process.env.NETSUITE_CLIENT_ID;
   if (!clientId) {

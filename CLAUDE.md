@@ -754,4 +754,36 @@ exact check while the dollar amount stays the same. Warning-level
 because legitimately recurring same-amount invoices from one vendor
 (e.g. a flat monthly retainer) are common and shouldn't auto-block.
 
+### Missing RBAC on accounting integration routes, and a locked-out admin role (2026-08)
+
+All 8 accounting integration routes (`connect`+`disconnect` × QBO/Xero/
+NetSuite/Intacct) checked only `session?.user` — any authenticated user,
+including a Viewer, could connect a new integration (Intacct's connect
+route accepts and stores live credentials directly, no OAuth redirect
+in between) or sever an org's live accounting connection. Fixed by
+adding a `requireOrgAdmin(role)` gate (`src/lib/api/route-guards.ts`,
+owner+admin only, same as workflow/PO settings) to all 8 routes.
+
+`src/app/api/ap/settings/{workflow,po}/route.ts` each had their own
+copy-pasted inline `requireAdmin(role)` closure doing the same check —
+exactly the kind of per-route duplication that let the integration
+routes ship with no copy at all. Both now import the same
+`requireOrgAdmin` helper.
+
+**While adding a test for the new helper, found a real pre-existing
+bug it was inheriting:** `MATRIX.admin` in `src/lib/rbac.ts` never
+actually granted `"users.manage"` — only `owner` had it, despite every
+comment in the codebase (`workflow/route.ts`, `po/route.ts`, the
+`/settings` layout gate, and the project memory doc) documenting these
+gates as "owner + admin only." Admins were silently locked out of
+`/settings` and every settings API route entirely. Fixed by adding
+`"users.manage"` to `admin`'s permission set, with a comment on the
+`Permission` type explaining why it must stay on both roles.
+
+`requireOrgAdmin` is intentionally `src/lib/api/route-guards.ts`, not
+added to `src/lib/rbac.ts` itself — it imports `NextResponse` from
+`next/server`, and `rbac.ts` is reachable from code that also runs
+under the worker build (`tsconfig.worker.json`). Keep app-only,
+NextResponse-returning helpers out of the worker-safe module graph.
+
 See `README.md` for full stack, conventions, and local-dev instructions.

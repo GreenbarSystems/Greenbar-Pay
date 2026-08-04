@@ -25,6 +25,7 @@ import {
   type IntacctCredentials,
 } from "@/lib/integrations/intacct/client";
 import { encryptToken } from "@/lib/integrations/tokens";
+import { requireOrgAdmin } from "@/lib/api/route-guards";
 
 const BodySchema = z.object({
   companyId: z.string().min(1),
@@ -37,7 +38,10 @@ export async function POST(req: Request) {
   if (!session?.user) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
-  const { organizationId } = session.user;
+  const { organizationId, role } = session.user;
+
+  const gate = requireOrgAdmin(role);
+  if (gate) return gate;
 
   let body: z.infer<typeof BodySchema>;
   try {

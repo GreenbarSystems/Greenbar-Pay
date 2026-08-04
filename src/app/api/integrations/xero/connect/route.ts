@@ -9,12 +9,16 @@ import { auth } from "@/lib/auth";
 import { XERO_AUTH_URL, XERO_SCOPES } from "@/lib/integrations/xero/client";
 import { generateCodeVerifier, generateCodeChallenge, generateState } from "@/lib/integrations/pkce";
 import { encryptOAuthState } from "@/lib/integrations/tokens";
+import { requireOrgAdmin } from "@/lib/api/route-guards";
 
 export async function GET() {
   const session = await auth();
   if (!session?.user) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
+
+  const gate = requireOrgAdmin(session.user.role);
+  if (gate) return gate;
 
   const redirectUri = `${process.env.AUTH_URL}/api/integrations/xero/callback`;
   const clientId = process.env.XERO_CLIENT_ID;

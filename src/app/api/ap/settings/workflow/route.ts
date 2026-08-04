@@ -10,21 +10,14 @@ import { auth } from "@/lib/auth";
 import { withOrg } from "@/db/client";
 import { organizations } from "@/db/schema";
 import { eq } from "drizzle-orm";
-import { can } from "@/lib/rbac";
-
-function requireAdmin(role: string) {
-  if (!can(role as Parameters<typeof can>[0], "users.manage")) {
-    return NextResponse.json({ error: "forbidden" }, { status: 403 });
-  }
-  return null;
-}
+import { requireOrgAdmin } from "@/lib/api/route-guards";
 
 export async function GET() {
   const session = await auth();
   if (!session?.user) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   const { organizationId, role } = session.user;
 
-  const gate = requireAdmin(role);
+  const gate = requireOrgAdmin(role);
   if (gate) return gate;
 
   const [org] = await withOrg(organizationId, async (tx) =>
@@ -49,7 +42,7 @@ export async function PATCH(req: Request) {
   if (!session?.user) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   const { organizationId, role } = session.user;
 
-  const gate = requireAdmin(role);
+  const gate = requireOrgAdmin(role);
   if (gate) return gate;
 
   let body: z.infer<typeof PatchSchema>;
