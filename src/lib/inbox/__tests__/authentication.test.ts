@@ -29,16 +29,32 @@ describe("evaluateSenderAuthentication", () => {
     expect(r.reason).toContain("SPF and DKIM both failed");
   });
 
-  it("does not reject on GRAY or PROCESSING_FAILED alone — inconclusive, not evidence of spoofing", () => {
-    expect(
-      evaluateSenderAuthentication({ spfVerdict: "GRAY", dkimVerdict: "GRAY" }).accepted,
-    ).toBe(true);
-    expect(
-      evaluateSenderAuthentication({
-        spfVerdict: "PROCESSING_FAILED",
-        dkimVerdict: "PROCESSING_FAILED",
-      }).accepted,
-    ).toBe(true);
+  // 2026-08 hardening — previously these fell through to fail-open
+  // ("not evidence of spoofing"), which meant a domain with zero SPF/
+  // DKIM configured (GRAY on both, since there's nothing to evaluate)
+  // was strictly easier for an attacker to exploit than a domain that
+  // actively fails an explicit check. Neither PASSing is now rejected
+  // regardless of which non-PASS value each mechanism landed on.
+  it("rejects when both SPF and DKIM are GRAY (no record configured — the easy spoofing path)", () => {
+    const r = evaluateSenderAuthentication({ spfVerdict: "GRAY", dkimVerdict: "GRAY" });
+    expect(r.accepted).toBe(false);
+    expect(r.reason).toContain("no SPF or DKIM authentication passed");
+    expect(r.reason).toContain("spf=GRAY");
+    expect(r.reason).toContain("dkim=GRAY");
+  });
+
+  it("rejects when both SPF and DKIM are PROCESSING_FAILED", () => {
+    const r = evaluateSenderAuthentication({
+      spfVerdict: "PROCESSING_FAILED",
+      dkimVerdict: "PROCESSING_FAILED",
+    });
+    expect(r.accepted).toBe(false);
+  });
+
+  it("rejects a mix of GRAY/FAIL/missing with no explicit PASS on either mechanism", () => {
+    expect(evaluateSenderAuthentication({ spfVerdict: "GRAY" }).accepted).toBe(false);
+    expect(evaluateSenderAuthentication({ dkimVerdict: "FAIL" }).accepted).toBe(false);
+    expect(evaluateSenderAuthentication({}).accepted).toBe(false);
   });
 
   it("honors an enforcing DMARC policy on DMARC failure even if SPF or DKIM individually passed", () => {

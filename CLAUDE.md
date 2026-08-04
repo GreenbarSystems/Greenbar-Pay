@@ -321,17 +321,33 @@ in the same `ses.receipt` SNS notification object
 gap was that the app discarded the rest of that object instead of
 reading it.
 
-**Policy — reject only on affirmative, unambiguous failure:**
-- SPF FAIL **and** DKIM FAIL → reject. Either alone passing is normal
-  for legitimate mail (forwarded mail commonly breaks SPF but DKIM
-  survives), so a single pass is accepted.
+**Policy — require a positive signal, not just the absence of an explicit
+failure (2026-08 hardening; see rationale below).**
 - DMARC FAIL **and** the domain's own published policy is
   `quarantine`/`reject` → reject (honoring the sending domain's stated
-  intent is the strongest signal available).
-- `GRAY` / `PROCESSING_FAILED` / missing verdicts → **fail open**.
-  Inconclusive is not evidence of spoofing. This also covers local dev
-  / `scripts/ingest-eml.ts`, which has no real SES receipt at all —
-  `input.authentication` is `undefined` there, not a fabricated pass.
+  intent is the strongest signal available; checked first).
+- SPF PASS **or** DKIM PASS → accept. Either alone is normal for
+  legitimate mail (forwarded mail commonly breaks SPF but DKIM
+  survives), so a single pass is enough.
+- Neither PASSes → **reject**, regardless of whether the non-passing
+  value is `FAIL`, `GRAY`, or `PROCESSING_FAILED` on either mechanism.
+- Fully missing verdict data (`input.authentication` is `undefined` —
+  local dev / `scripts/ingest-eml.ts`, which has no real SES receipt at
+  all) still fails **open** — that's a tooling gap, not a production
+  message SES actually evaluated and found nothing on.
+
+**Why this isn't "reject only on explicit FAIL" anymore:** a domain
+with NO SPF record and NO DKIM signature configured gets `GRAY` on
+both from SES, not `FAIL` — there's nothing to evaluate, not something
+that failed evaluation. Under the original policy that sailed through
+untouched, which meant it was strictly EASIER for an attacker to use a
+domain with zero email authentication than one that actively fails an
+explicit check — backwards for a control meant to catch spoofing. By
+2026, DMARC alignment requirements from Gmail/Yahoo's bulk-sender
+rules mean virtually every legitimate business domain sending invoice
+email configures at least one of SPF/DKIM to avoid being spam-filtered
+everywhere else, so requiring one PASS is a real bar, not a blanket
+vendor-hostile change.
 
 Checked in `src/lib/inbox/ingest.ts` regardless of routing outcome —
 an attacker who has guessed a valid org's inbox address is exactly the

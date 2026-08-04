@@ -16,14 +16,37 @@
  * additional AWS configuration is needed, just reading fields that
  * were already being delivered and discarded.
  *
- * Policy: reject only on affirmative, unambiguous authentication
- * failure. GRAY / PROCESSING_FAILED / missing verdicts (e.g. local
- * dev via scripts/ingest-eml.ts, which has no SES receipt at all) fail
- * OPEN — there's no evidence of spoofing, only an inconclusive check.
- * A single passing mechanism is normal for legitimate mail (forwarded
- * mail commonly breaks SPF but DKIM survives), so PASS on either SPF
- * or DKIM is accepted. The sending domain's own DMARC policy, when
- * published and enforcing, is honored as the strongest signal.
+ * Policy (2026-08 hardening — see below for what changed): accept only
+ * when at least one of SPF or DKIM explicitly PASSES, or reject when
+ * DMARC fails under an enforcing policy. GRAY/PROCESSING_FAILED/absent
+ * verdicts on BOTH mechanisms are now treated as "no authentication
+ * signal" and rejected, not accepted. Fully missing verdict data
+ * (undefined — local dev via scripts/ingest-eml.ts, which has no SES
+ * receipt at all) still fails OPEN, since that's a tooling gap, not a
+ * production message SES actually evaluated and found nothing on.
+ *
+ * A single passing mechanism is normal and sufficient for legitimate
+ * mail (forwarded mail commonly breaks SPF but DKIM survives), so PASS
+ * on either SPF or DKIM alone is still accepted. The sending domain's
+ * own DMARC policy, when published and enforcing, is honored as the
+ * strongest signal and checked first.
+ *
+ * Why this changed from the original "reject only on explicit FAIL":
+ * a domain with NO SPF record and NO DKIM signature configured at all
+ * gets GRAY on both from SES — not FAIL — since there's nothing to
+ * evaluate, not something that failed evaluation. Under the original
+ * policy that sailed through untouched: it's meaningfully EASIER for
+ * an attacker to use a domain with zero email authentication than one
+ * that actively fails an explicit check, which inverts the intended
+ * defense. By 2026, DMARC alignment requirements from Gmail/Yahoo's
+ * bulk-sender rules mean virtually every legitimate business domain
+ * that sends invoice email configures at least one of SPF/DKIM to
+ * avoid being spam-filtered everywhere else — a domain with genuinely
+ * neither is now the unusual case, not the common one, so requiring
+ * one PASS is a real bar rather than a blanket vendor-hostile change.
+ * A rejected message is never silently dropped either way: it still
+ * gets an email_messages row with status='failed' and a status_reason
+ * an operator can review (src/lib/inbox/ingest.ts).
  */
 
 export type SesVerdictStatus = "PASS" | "FAIL" | "GRAY" | "PROCESSING_FAILED";
@@ -65,7 +88,17 @@ export function evaluateSenderAuthentication(
     };
   }
 
-  // Otherwise: reject only when BOTH SPF and DKIM explicitly failed.
+  // Accept as soon as either mechanism explicitly PASSes — a single
+  // pass is a real, positive authentication signal and is normal for
+  // legitimate mail (see module comment on forwarded mail).
+  if (verdicts.spfVerdict === "PASS" || verdicts.dkimVerdict === "PASS") {
+    return { accepted: true, reason: null };
+  }
+
+  // Neither passed. Distinguish "actively failed" from "no
+  // authentication configured at all" for the audit trail
+  // (email_messages.status_reason) — both are rejected, but they're
+  // different situations for whoever triages a failed message.
   if (verdicts.spfVerdict === "FAIL" && verdicts.dkimVerdict === "FAIL") {
     return {
       accepted: false,
@@ -73,5 +106,10 @@ export function evaluateSenderAuthentication(
     };
   }
 
-  return { accepted: true, reason: null };
+  return {
+    accepted: false,
+    reason:
+      `sender authentication failed: no SPF or DKIM authentication passed ` +
+      `(spf=${verdicts.spfVerdict ?? "none"}, dkim=${verdicts.dkimVerdict ?? "none"})`,
+  };
 }
