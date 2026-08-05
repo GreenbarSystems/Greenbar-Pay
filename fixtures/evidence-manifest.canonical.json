@@ -1,0 +1,123 @@
+{
+  "schemaVersion": "evidence.v2",
+  "documentId": "d0000000-0000-4000-8000-000000000001",
+  "extractedInvoiceId": "e0000000-0000-4000-8000-000000000002",
+  "vendor": {
+    "name": "Contoso Cabling & Datacom, Ltd.",
+    "canonicalId": "vend_contoso_cabling",
+    "remitTo": {
+      "name": "Contoso Cabling & Datacom, Ltd.",
+      "address": "1400 Industrial Way, Suite 220, Chandler, AZ 85226"
+    }
+  },
+  "invoice": {
+    "number": "INV-2026-04187",
+    "issueDate": "2026-07-24",
+    "dueDate": "2026-08-23",
+    "currency": "USD",
+    "subtotal": "18620.00",
+    "tax": "1488.60",
+    "total": "20108.60",
+    "poNumber": "PO-2026-1032"
+  },
+  "lines": [
+    {
+      "lineNumber": 1,
+      "description": "Cat6A patch cable, 10ft, blue (bulk 500ct)",
+      "quantity": "500",
+      "unit": "ea",
+      "unitPrice": "6.24",
+      "extendedPrice": "3120.00",
+      "confidence": 0.98,
+      "baselineUnitPrice": "6.20",
+      "sigmaFromBaseline": 0.31
+    },
+    {
+      "lineNumber": 2,
+      "description": "SFP+ 10G SR modules, Cisco-compatible",
+      "quantity": "40",
+      "unit": "ea",
+      "unitPrice": "84.00",
+      "extendedPrice": "3360.00",
+      "confidence": 0.94,
+      "baselineUnitPrice": "82.75",
+      "sigmaFromBaseline": 0.48
+    },
+    {
+      "lineNumber": 3,
+      "description": "On-site cable termination labor",
+      "quantity": "56",
+      "unit": "hr",
+      "unitPrice": "217.86",
+      "extendedPrice": "12200.00",
+      "confidence": 0.87,
+      "baselineUnitPrice": "165.00",
+      "sigmaFromBaseline": 3.35
+    }
+  ],
+  "briefingCard": {
+    "riskScore": 48,
+    "weightTableVersion": "v1.1.0",
+    "riskFactorsJson": {
+      "vendorHistoryDays": 412,
+      "priorInvoiceCount": 27,
+      "amountVsRolling90p": 1.34,
+      "poMatchStatus": "partial",
+      "lineRateDrift": true,
+      "remitToChanged": true,
+      "duplicateAmountLast180d": true,
+      "afterHoursSubmission": false
+    },
+    "llmJustification": "This invoice is flagged primarily by two hard signals: (1) the extended labor line is 3.35σ above the vendor's trailing rate baseline, and (2) the remit-to address does not match the vendor's canonical remit-to on file. The vendor is well-established (412 days, 27 prior invoices) and the PO is a partial match, so the transaction is not inherently suspicious, but both drift signals should be confirmed with the vendor by phone before release.",
+    "llmJustificationIsAdvisory": true
+  },
+  "validationFindings": [
+    {
+      "code": "possible_duplicate_amount",
+      "severity": "blocking",
+      "message": "Total $20,108.60 matches an invoice from Contoso Cabling paid on 2026-05-11."
+    },
+    {
+      "code": "remit_to_drift",
+      "severity": "warning",
+      "message": "Remit-to address differs from the vendor's canonical remit-to on file."
+    },
+    {
+      "code": "line_rate_drift",
+      "severity": "warning",
+      "message": "Line 3 unit rate ($217.86) is 3.35σ above vendor baseline ($165.00)."
+    }
+  ],
+  "approvalAttestation": {
+    "approvedByUserId": "u0000000-0000-4000-8000-0000000000a1",
+    "approvedByDisplayName": "Priya Ramanathan",
+    "approvedByRole": "Controller",
+    "approvedAt": "2026-07-25T14:22:07.000Z",
+    "attestationText": "I have reviewed this invoice, its supporting documentation, and the flagged findings, and I approve payment on behalf of the organization.",
+    "overrideOfBlockingFinding": {
+      "findingCode": "possible_duplicate_amount",
+      "rationale": "Confirmed with vendor AR (call log 2026-07-25 13:41). Original May invoice was for a separate site build (Phoenix DC-2). This invoice is Chandler DC-3, tracked under PO-2026-1032. Duplicate-total is coincidence.",
+      "secondApproverUserId": "u0000000-0000-4000-8000-0000000000b2",
+      "secondApproverDisplayName": "Jordan Reyes",
+      "secondApproverRole": "CFO",
+      "secondApproverAt": "2026-07-25T14:20:41.000Z"
+    }
+  },
+  "llmRun": {
+    "runId": "run_01HXXXXXX_briefing_v3_2_0",
+    "modelId": "claude-sonnet-4-6",
+    "promptVersion": "3.2.0",
+    "inputHash": "8b7d0a1c9f4e2b6a3d5c7e9f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b",
+    "startedAt": "2026-07-25T14:12:04.000Z",
+    "completedAt": "2026-07-25T14:12:11.000Z",
+    "complianceRegistryReference": "src/lib/llm/registry.ts#claude-sonnet-4-6",
+    "retentionDaysAtDispatch": 0
+  },
+  "originalDocument": {
+    "storageKey": "documents/2026/07/25/e0000000-0000-4000-8000-000000000002/original.pdf",
+    "contentType": "application/pdf",
+    "byteLength": 214870,
+    "contentHash": "9f2c1b0a7d4e6f8a3b5c1d2e4f6a8b0c2d4e6f8a0b1c3d5e7f9a1b3c5d7e9f01",
+    "ingestedAt": "2026-07-25T14:11:22.000Z"
+  }
+}
