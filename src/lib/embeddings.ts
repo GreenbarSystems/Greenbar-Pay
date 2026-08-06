@@ -33,10 +33,13 @@ export async function generateEmbedding(text: string): Promise<number[] | null> 
   });
 
   if (!res.ok) {
+    // Response body can echo back request content (e.g. malformed-input
+    // errors quote the offending text) — log it server-side only, never
+    // fold it into the thrown message, which propagates into job failure
+    // records and logs that outlive this request.
     const body = await res.text().catch(() => "(unreadable)");
-    throw new Error(
-      `Voyage AI embedding failed: HTTP ${res.status} — ${body.slice(0, 200)}`,
-    );
+    console.error(`[embeddings] Voyage AI HTTP ${res.status}:`, body.slice(0, 200));
+    throw new Error(`Voyage AI embedding failed: HTTP ${res.status}`);
   }
 
   const json = (await res.json()) as VoyageResponse;

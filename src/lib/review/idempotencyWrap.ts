@@ -7,6 +7,7 @@
 import { NextResponse } from "next/server";
 import {
   hashRequest,
+  isValidIdempotencyKey,
   readIdempotencyKey,
   writeIdempotencyKey,
 } from "@/lib/idempotency";
@@ -27,6 +28,9 @@ export async function withIdempotency(
   method: string = req.method,
 ): Promise<NextResponse> {
   const key = req.headers.get("Idempotency-Key");
+  if (key && !isValidIdempotencyKey(key)) {
+    return NextResponse.json({ error: "idempotency_key_invalid" }, { status: 400 });
+  }
   const requestHash = key ? hashRequest(method, path, body) : "";
 
   if (key) {

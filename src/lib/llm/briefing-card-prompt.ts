@@ -172,11 +172,17 @@ export interface BriefingVendorProfile {
 }
 
 export interface BriefingPriorInvoice {
-  invoiceNumber: string | null;
+  // invoiceNumber deliberately omitted — a prior invoice's identifier
+  // has no analytical value for the delta-comparison this is used for,
+  // and there's no reason to send it across the Anthropic API boundary.
   invoiceDate: string | null;
   paymentTerms: string | null;
   currency: string | null;
-  total: string | null;
+  // Bucketed (e.g. "~$5k"), not the exact figure — same data-minimization
+  // rationale as corrections/index.ts's buildQueryContextText: a relative
+  // magnitude is enough for delta reasoning without sending a second
+  // exact dollar amount.
+  totalBucket: string | null;
   topLineDescriptions: string[];
 }
 

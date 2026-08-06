@@ -1,8 +1,14 @@
 /**
  * GET /api/healthz — operations health probe.
  *
- * Public, unauthenticated. Returns the reachability of the three external
- * dependencies the worker + web app need: Postgres, S3/MinIO, Anthropic.
+ * Public, unauthenticated — deliberately, so a load balancer / k8s probe
+ * can hit it with no session. Returns just {status, timestamp} to anyone.
+ *
+ * The per-dependency detail (checks.db/s3/anthropic, including error
+ * text) is gated behind HEALTHZ_TOKEN: those error messages can echo
+ * DB host/connection info or the S3 bucket name, so they're only worth
+ * showing to whoever's actually monitoring this, not the open internet.
+ * Unset HEALTHZ_TOKEN → detail never renders, for anyone.
  *
  * Anthropic isn't pinged — a healthcheck shouldn't burn quota or risk
  * tripping the circuit breaker on a transient 5xx. We only confirm an
@@ -20,9 +26,10 @@
  *   503 on "down" (LB drains)
  *
  * The handler is deliberately fast: parallel checks, individual timeouts,
- * no auth lookup. Anything operationally meaningful should appear within
- * 2s even when a downstream is hung.
+ * no auth lookup on the DB. Anything operationally meaningful should
+ * appear within 2s even when a downstream is hung.
  */
+import { timingSafeEqual } from "node:crypto";
 import { NextResponse } from "next/server";
 import { sql } from "drizzle-orm";
 import { rawAdminDb } from "@/db/internal/rawClient";
@@ -121,7 +128,18 @@ function checkAnthropicKey(): CheckResult {
   };
 }
 
-export async function GET() {
+function hasValidHealthzToken(req: Request): boolean {
+  const configured = process.env.HEALTHZ_TOKEN;
+  if (!configured) return false;
+  const provided = req.headers.get("x-healthz-token") ?? "";
+  const a = Buffer.from(configured);
+  const b = Buffer.from(provided);
+  // timingSafeEqual throws on length mismatch rather than returning
+  // false, and requires equal-length buffers — check that first.
+  return a.length === b.length && timingSafeEqual(a, b);
+}
+
+export async function GET(req: Request) {
   const [db, s3] = await Promise.all([checkDb(), checkS3()]);
   const anthropic = checkAnthropicKey();
 
@@ -134,11 +152,9 @@ export async function GET() {
       ? "degraded"
       : "ok";
 
-  const body = {
-    status,
-    timestamp: new Date().toISOString(),
-    checks: { db, s3, anthropic },
-  };
+  const body = hasValidHealthzToken(req)
+    ? { status, timestamp: new Date().toISOString(), checks: { db, s3, anthropic } }
+    : { status, timestamp: new Date().toISOString() };
 
   return NextResponse.json(body, {
     status: status === "down" ? 503 : 200,

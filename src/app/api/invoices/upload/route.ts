@@ -30,6 +30,7 @@ import { checkIngestRateLimit } from "@/lib/security/ingest-rate-limit";
 import { storage, documentStorageKey } from "@/lib/storage";
 import {
   hashRequest,
+  isValidIdempotencyKey,
   readIdempotencyKey,
   writeIdempotencyKey,
 } from "@/lib/idempotency";
@@ -120,6 +121,9 @@ export async function POST(req: Request) {
   }
 
   const idemKey = req.headers.get("Idempotency-Key");
+  if (idemKey && !isValidIdempotencyKey(idemKey)) {
+    return NextResponse.json({ error: "idempotency_key_invalid" }, { status: 400 });
+  }
   const buf = Buffer.from(await file.arrayBuffer());
   const requestHash = idemKey
     ? hashRequest("POST", "/api/invoices/upload", {

@@ -10,10 +10,6 @@ import { Pool } from "pg";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { migrate } from "drizzle-orm/node-postgres/migrator";
 
-const ADMIN_URL =
-  process.env.DATABASE_URL_ADMIN ??
-  "postgres://app_admin:app_admin_pw@localhost:5432/greenbar";
-
 /**
  * Applies the full migration set (generated migrations, then every
  * sidecar SQL file in filename order) against the given pool.
@@ -76,7 +72,15 @@ export async function applyOneSidecar(pool: Pool, filename: string): Promise<voi
 }
 
 async function main() {
-  const pool = new Pool({ connectionString: ADMIN_URL });
+  // Scoped to the CLI entrypoint, not module top-level — applyMigrations
+  // and applyOneSidecar are imported by scripts (e.g.
+  // verify-partition-backfill.ts) that connect via their own maintenance
+  // URL, not DATABASE_URL_ADMIN, and shouldn't be forced to have it set
+  // just because they import from this module.
+  if (!process.env.DATABASE_URL_ADMIN) {
+    throw new Error("DATABASE_URL_ADMIN is required (no default — this connects with BYPASSRLS).");
+  }
+  const pool = new Pool({ connectionString: process.env.DATABASE_URL_ADMIN });
   await applyMigrations(pool);
   await pool.end();
   console.log("✓ migrations complete");

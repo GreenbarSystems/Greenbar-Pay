@@ -20,6 +20,17 @@ import { withOrg, type Tx } from "@/db/client";
  */
 const IDEMPOTENCY_TTL_SQL = sql`now() - interval '24 hours'`;
 
+/**
+ * apiIdempotencyKeys.key is an unbounded text column — this caps it at
+ * the application layer so a client can't grow the table's PK index with
+ * an arbitrarily large client-supplied header value.
+ */
+export const MAX_IDEMPOTENCY_KEY_LENGTH = 256;
+
+export function isValidIdempotencyKey(key: string): boolean {
+  return key.length > 0 && key.length <= MAX_IDEMPOTENCY_KEY_LENGTH;
+}
+
 export function hashRequest(method: string, path: string, body: unknown): string {
   return createHash("sha256")
     .update(method)

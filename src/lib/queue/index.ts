@@ -8,9 +8,11 @@
  */
 import PgBoss from "pg-boss";
 
-const ADMIN_URL =
-  process.env.DATABASE_URL_ADMIN ??
-  "postgres://app_admin:app_admin_pw@localhost:5432/greenbar";
+if (!process.env.DATABASE_URL_ADMIN) {
+  throw new Error("DATABASE_URL_ADMIN is required (no default — this connects with BYPASSRLS).");
+}
+
+const ADMIN_URL = process.env.DATABASE_URL_ADMIN;
 
 let boss: PgBoss | null = null;
 let starting: Promise<PgBoss> | null = null;

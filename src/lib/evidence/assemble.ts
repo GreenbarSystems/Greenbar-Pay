@@ -187,8 +187,11 @@ export async function assembleEvidenceManifest(
       documentId: doc.id,
       sourceChannel: doc.source ?? null,
       mimeType: doc.mimeType ?? null,
+      // contentHash is the verification handle (content-addressable);
+      // storageKey (raw S3 object key) is deliberately omitted — this
+      // manifest is a downloadable customer-facing surface and the key
+      // would leak internal bucket layout with no verification benefit.
       contentHash: doc.contentHash ?? null,
-      storageKey: doc.storageKey ?? null,
       receivedAt: doc.createdAt?.toISOString() ?? null,
       pageCount: doc.pageCount ?? null,
     },
@@ -351,10 +354,11 @@ function serialiseLine(
     amount: l.amount,
     confidenceScore: l.confidenceScore,
     confidenceReason: l.confidenceReason,
+    // histAvgPrice/histStddevPrice/stddevDistance deliberately omitted —
+    // same rationale as the coaching.context strip above: per-vendor
+    // financial baselines belong in the sanctioned DB column, not on a
+    // downloadable file any invoice.read holder on the client can pull.
     histSampleCount: l.histSampleCount,
-    histAvgPrice: l.histAvgPrice,
-    histStddevPrice: l.histStddevPrice,
-    stddevDistance: l.stddevDistance,
     updatedAt: l.updatedAt?.toISOString() ?? null,
   };
 }

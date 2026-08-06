@@ -72,7 +72,7 @@ export function buildQueryContextText(args: {
   return parts.join(". ");
 }
 
-function bucketAmount(n: number): string {
+export function bucketAmount(n: number): string {
   if (n < 500) return "<$500";
   if (n < 2_000) return "~$1k";
   if (n < 7_500) return "~$5k";
@@ -287,12 +287,16 @@ async function vectorSearch(args: {
   limit: number;
 }): Promise<CorrectionSignal[]> {
   // Run inside withOrgAsWorker so the tenant isolation RLS policy fires.
+  // The explicit organization_id filter below is defense in depth on top
+  // of RLS, not a substitute for it — raw sql`` bypasses Drizzle's query
+  // builder, so nothing else here would catch an RLS misconfiguration.
   return withOrgAsWorker(args.organizationId, async (tx) => {
     const embeddingLiteral = `[${args.embedding.join(",")}]`;
     const result = await tx.execute<RawCorrectionRow>(sql`
       SELECT corrected_fields, confirmed_at::text AS confirmed_at
       FROM extraction_corrections
       WHERE embedding IS NOT NULL
+        AND organization_id = ${args.organizationId}
       ORDER BY embedding <=> ${embeddingLiteral}::vector
       LIMIT ${args.limit}
     `);
@@ -312,7 +316,12 @@ async function vendorSearch(args: {
         confirmedAt: extractionCorrections.confirmedAt,
       })
       .from(extractionCorrections)
-      .where(eq(extractionCorrections.vendorId, args.vendorId))
+      .where(
+        and(
+          eq(extractionCorrections.organizationId, args.organizationId),
+          eq(extractionCorrections.vendorId, args.vendorId),
+        ),
+      )
       .orderBy(desc(extractionCorrections.confirmedAt))
       .limit(args.limit);
     return rows.map((r) => ({

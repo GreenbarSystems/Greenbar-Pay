@@ -55,6 +55,7 @@ import { scrubError } from "@/lib/llm/scrub";
 import {
   retrieveSimilarCorrections,
   buildQueryContextText,
+  bucketAmount,
 } from "@/lib/corrections";
 import type { JobPayloads } from "@/lib/queue";
 import { JOB } from "@/lib/queue";
@@ -339,6 +340,12 @@ export async function handleGenerateBriefingCard(
     return [];
   });
 
+  const priorTotalNumeric = prep.priorInvoice
+    ? numericOrNull(prep.priorInvoice.total)
+    : null;
+  const priorTotalBucket =
+    priorTotalNumeric !== null ? bucketAmount(priorTotalNumeric) : null;
+
   // Phase 2 — dispatch the LLM. Network call lives outside the tx so
   // we don't hold a row lock across the round trip.
   const outcome = await dispatchBriefingCardGeneration({
@@ -380,11 +387,10 @@ export async function handleGenerateBriefingCard(
     findings: prep.findings,
     priorInvoice: prep.priorInvoice
       ? {
-          invoiceNumber: prep.priorInvoice.invoiceNumber,
           invoiceDate: prep.priorInvoice.invoiceDate,
           paymentTerms: prep.priorInvoice.paymentTerms,
           currency: prep.priorInvoice.currency,
-          total: prep.priorInvoice.total,
+          totalBucket: priorTotalBucket,
           topLineDescriptions: prep.priorLines
             .map((l) => l.description)
             .filter((d): d is string => d !== null),

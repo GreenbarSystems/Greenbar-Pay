@@ -32,15 +32,20 @@ export const evidencePackets = pgTable(
   "evidence_packets",
   {
     id: uuid("id").primaryKey().defaultRandom(),
+    // onDelete: "restrict" — MUST match sidecar migration 0018_pr15_audit_integrity.sql.
+    // Cascade deletes bypass the append-only RULE on this table (FK triggers
+    // run below RULE level), silently destroying sealed evidence with no
+    // audit trail. If drizzle-kit ever regenerates a migration for this
+    // table, it must not reintroduce CASCADE here.
     organizationId: uuid("organization_id")
       .notNull()
-      .references(() => organizations.id, { onDelete: "cascade" }),
+      .references(() => organizations.id, { onDelete: "restrict" }),
     extractedInvoiceId: uuid("extracted_invoice_id")
       .notNull()
-      .references(() => extractedInvoices.id, { onDelete: "cascade" }),
+      .references(() => extractedInvoices.id, { onDelete: "restrict" }),
     documentId: uuid("document_id")
       .notNull()
-      .references(() => documents.id, { onDelete: "cascade" }),
+      .references(() => documents.id, { onDelete: "restrict" }),
     sealedAt: timestamp("sealed_at", { withTimezone: true }).notNull().defaultNow(),
     sealedByUserId: uuid("sealed_by_user_id").references(() => users.id, {
       onDelete: "set null",
