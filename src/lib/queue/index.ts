@@ -8,12 +8,6 @@
  */
 import PgBoss from "pg-boss";
 
-if (!process.env.DATABASE_URL_ADMIN) {
-  throw new Error("DATABASE_URL_ADMIN is required (no default — this connects with BYPASSRLS).");
-}
-
-const ADMIN_URL = process.env.DATABASE_URL_ADMIN;
-
 let boss: PgBoss | null = null;
 let starting: Promise<PgBoss> | null = null;
 
@@ -21,8 +15,18 @@ export async function getQueue(): Promise<PgBoss> {
   if (boss) return boss;
   if (starting) return starting;
   starting = (async () => {
+    // Checked here, not at module load: this module is imported by route
+    // handlers that `next build`'s "Collecting page data" step loads with
+    // NODE_ENV=production but no runtime secrets (DATABASE_URL_ADMIN is
+    // injected into the running container, not baked into the image) — a
+    // module-scope check can't tell "build, no secrets yet" apart from
+    // "running, actually misconfigured" and breaks every production
+    // build. Same fix shape as clamAvScan's assertAvScanningConfiguredInProduction.
+    if (!process.env.DATABASE_URL_ADMIN) {
+      throw new Error("DATABASE_URL_ADMIN is required (no default — this connects with BYPASSRLS).");
+    }
     const b = new PgBoss({
-      connectionString: ADMIN_URL, // pg-boss needs DDL for its own schema
+      connectionString: process.env.DATABASE_URL_ADMIN, // pg-boss needs DDL for its own schema
       schema: "pgboss",
       retryLimit: 5,
       retryDelay: 30, // seconds
