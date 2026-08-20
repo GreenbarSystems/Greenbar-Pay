@@ -92,3 +92,83 @@ describe("evidence manifest schema lock", () => {
     expect(EVIDENCE_V1_KEYS).toEqual([...EVIDENCE_V1_KEYS].sort());
   });
 });
+
+// -----------------------------------------------------------------------------
+// -0 normalisation (defense-in-depth for cross-tool parity with gbverify v0.3.0)
+// -----------------------------------------------------------------------------
+//
+// Context: `src/lib/coaching/compute.ts` computes `-round2(discountValue)`,
+// which produces `-0` (as a JS Number) when `discountValue` rounds to zero.
+// That value ends up on `briefing_cards.coachingPromptsJson.dollarImpact` and
+// gets pulled into the sealed evidence manifest. In current V8,
+// `JSON.stringify(-0)` already emits `"0"`, so the on-disk JSON never actually
+// contains `-0`. But we explicitly normalise the value inside
+// `canonicalJsonStringify` for defense-in-depth: this keeps Pay's canonicaliser
+// grep-identical with the gbverify Node + Python CLIs, and guards against any
+// future code path that computes a canonical string via something other than
+// `JSON.stringify`.
+//
+// The reference hashes below were captured 2026-08-05 by running gbverify
+// v0.3.0's Node canonicaliser (post-PR #1, commit 519a121) against the same
+// fixtures. If a canonicalisation-affecting change lands in either Pay or
+// gbverify, one of these assertions will fail — that is exactly the signal
+// we want.
+
+describe("canonicalSha256 -0 normalisation", () => {
+  it("hashes {dollarImpact:-0} identically to {dollarImpact:0}", () => {
+    const withNegZero = { dollarImpact: -0 };
+    const withZero = { dollarImpact: 0 };
+    expect(canonicalSha256(withNegZero)).toBe(canonicalSha256(withZero));
+  });
+
+  it("hashes -0 inside a nested coaching-prompt shape identically to 0", () => {
+    const withNegZero = {
+      coachingPrompts: [
+        { code: "early_payment_discount", dollarImpact: -0, meta: { discountPct: 0 } },
+      ],
+    };
+    const withZero = {
+      coachingPrompts: [
+        { code: "early_payment_discount", dollarImpact: 0, meta: { discountPct: 0 } },
+      ],
+    };
+    expect(canonicalSha256(withNegZero)).toBe(canonicalSha256(withZero));
+  });
+
+  it("hashes -0 inside an array element identically to 0", () => {
+    // NB: JSON.stringify normalises -0 to 0 in array positions too, but we
+    // still want a regression assertion so an accidental "return NaN" or
+    // "throw" in the replacer would be caught.
+    expect(canonicalSha256({ xs: [-0, 0, -0] })).toBe(canonicalSha256({ xs: [0, 0, 0] }));
+  });
+
+  it("matches gbverify v0.3.0 byte-for-byte on {dollarImpact:-0}", () => {
+    // Reference hash produced by cli-node/bin/gbverify.js in
+    // GreenbarSystems/gbverify @ 519a121 (v0.3.0), 2026-08-05.
+    const GBVERIFY_V030_HASH = "aab1567895141dd8402ae38c189fbf5951c96b49f58cf86a08ea8518953a93da";
+    expect(canonicalSha256({ dollarImpact: -0 })).toBe(GBVERIFY_V030_HASH);
+    // And a legitimate zero must produce the same hash.
+    expect(canonicalSha256({ dollarImpact: 0 })).toBe(GBVERIFY_V030_HASH);
+  });
+
+  it("matches gbverify v0.3.0 byte-for-byte on a nested coaching-prompt shape", () => {
+    // Reference hash produced by the same gbverify v0.3.0 canonicaliser
+    // against the exact nested fixture, 2026-08-05.
+    const GBVERIFY_V030_HASH = "d1b498465de46c8174c49efcfc4e84c33844d976c46aadde098ca4e0fd6447a8";
+    const packet = {
+      coachingPrompts: [
+        { code: "early_payment_discount", dollarImpact: -0, meta: { discountPct: 0 } },
+      ],
+    };
+    expect(canonicalSha256(packet)).toBe(GBVERIFY_V030_HASH);
+  });
+
+  it("is idempotent: re-hashing the canonical bytes reproduces the same hash", () => {
+    // The auditor workflow is: read packet JSON from disk, canonicalise,
+    // hash, compare to the sealed hash. Round-tripping through JSON.parse
+    // and re-canonicalising must be stable.
+    const original = { dollarImpact: -0, meta: { discountPct: 0 } };
+    const roundTripped = JSON.parse(JSON.stringify(original));
+    expect(canonicalSha256(original)).toBe(canonicalSha256(roundTripped));
+  });
+});

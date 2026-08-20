@@ -367,6 +367,27 @@ function serialiseLine(
  * Deterministic SHA-256 over the manifest. Keys are sorted recursively
  * so the same logical content always hashes to the same digest,
  * regardless of how the JS object was constructed.
+ *
+ * Cross-language parity: this function's output must match
+ * `@greenbarsystems/gbverify` v0.3.0's canonicalisation byte-for-byte,
+ * so an auditor running `gbverify verify <packet.json>` reproduces the
+ * same hash the sealer wrote.
+ *
+ * The `-0 -> 0` normalisation below is defense-in-depth. In current
+ * V8, `JSON.stringify(-0)` already emits `"0"` in every context we
+ * exercise (top-level, object property, array element), so Pay's
+ * on-disk JSON never contains `-0` today. `src/lib/coaching/compute.ts`
+ * *can* place a `-0` value into `briefing_cards.coachingPromptsJson`
+ * (via `-round2(discountValue)` when the discount rounds to zero), but
+ * by the time that value passes through `JSON.stringify` here, the
+ * sign is dropped by the engine. We normalise explicitly anyway to:
+ *   - keep this canonicaliser grep-identical with the gbverify Node
+ *     and Python CLIs (see cli-node/bin/gbverify.js in gbverify v0.3.0)
+ *   - guard against a future code path that computes a canonical
+ *     string via something other than `JSON.stringify` (custom
+ *     serialiser, incremental streaming writer, etc.)
+ *   - make the intent explicit so future readers do not "clean up"
+ *     the check thinking it is dead code
  */
 export function canonicalSha256(value: unknown): string {
   return createHash("sha256").update(canonicalJsonStringify(value)).digest("hex");
@@ -381,6 +402,9 @@ function canonicalJsonStringify(value: unknown): string {
       }
       return sorted;
     }
+    // Normalize -0 to 0 for byte-parity with gbverify v0.3.0.
+    // Object.is(-0, 0) === false, so we can detect it precisely.
+    if (typeof v === "number" && v === 0 && Object.is(v, -0)) return 0;
     return v;
   });
 }
