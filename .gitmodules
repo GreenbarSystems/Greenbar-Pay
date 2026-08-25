@@ -1,0 +1,3 @@
+[submodule "vendor/gbverify"]
+	path = vendor/gbverify
+	url = https://github.com/GreenbarSystems/gbverify.git

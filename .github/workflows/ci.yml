@@ -6,8 +6,60 @@ on:
     branches: [main]
 
 jobs:
+  evidence-hash-drift:
+    # Sept 2026 audit-trail hardening gate.
+    #
+    # The evidence packet's SHA-256 manifest hash is what makes an approved
+    # invoice's audit trail cryptographically verifiable by third parties
+    # (Big Four auditors, in particular) via the open-source gbverify CLI at
+    # github.com/GreenbarSystems/gbverify. That verification only works as
+    # long as canonicalJsonStringify in src/lib/evidence/assemble.ts and the
+    # canonicalisation implemented inside both gbverify CLIs produce
+    # byte-identical serialisations of the same input.
+    #
+    # If someone changes the canonicalisation (e.g. "cleans up" the
+    # sortReplacer to use structuredClone + Object.fromEntries, or ports
+    # the JSON.stringify call to a helper that adds whitespace, or ports
+    # any amount from string to number), EVERY previously-sealed evidence
+    # packet becomes unverifiable overnight — the customer's auditors see
+    # a red X on documents that were valid when sealed. That is a category
+    # of bug we cannot let ship, and it is not caught by any unit test
+    # that only asserts internal invariants, because such a test would
+    # move with the code being refactored.
+    #
+    # This job checks the contract from the OUTSIDE: it hashes a pinned
+    # fixture with the real (imported) canonicalSha256 from assemble.ts,
+    # then re-verifies with both gbverify implementations, then compares
+    # against a snapshot value. Any drift blocks the merge.
+    #
+    # Ownership: whoever bumps schemaVersion in assemble.ts must also:
+    #   (a) bump SUPPORTED_SCHEMA_VERSIONS in scripts/verify-gbverify-drift.ts,
+    #   (b) cut a matching gbverify release + bump the vendor/gbverify submodule,
+    #   (c) update EXPECTED_HASH in the drift script.
+    # See CONTRIBUTING-evidence-hash.md for the full procedure.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          # gbverify is a git submodule at vendor/gbverify pinned to a
+          # tagged release. Recursive checkout is REQUIRED — without it
+          # the drift script's CLI paths won't exist and CI will fail
+          # for a confusing reason (missing file rather than drift).
+          submodules: recursive
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "20"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install (drift check only needs tsx + zero-dep CLIs)
+        run: npm install --no-audit --no-fund
+      - name: Verify canonicalisation contract vs gbverify (Node + Python)
+        run: npm run verify:gbverify-drift
+
   lint-and-test:
     runs-on: ubuntu-latest
+    needs: evidence-hash-drift
     services:
       postgres:
         image: pgvector/pgvector:pg16
